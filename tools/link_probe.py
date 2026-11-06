@@ -70,8 +70,9 @@ def main():
 
     # Platform sources first: whatever they define must not be stubbed.
     platform_objs = []
-    for src in sorted((ROOT / "platform" / "src").glob("*.c")):
-        obj = out / (src.stem + ".o")
+    for src in sorted((ROOT / "platform" / "src").rglob("*.c")):
+        obj = out / "platform" / src.relative_to(ROOT / "platform" / "src").with_suffix(".o")
+        obj.parent.mkdir(parents=True, exist_ok=True)
         cc(src, obj)
         platform_objs.append(obj)
     provided = set()

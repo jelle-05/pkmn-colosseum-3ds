@@ -70,7 +70,7 @@ PERMISSIVE = [
 
 DIAG = re.compile(r"^(?P<file>.*?):(?P<line>\d+):(?P<col>\d+): (?P<kind>error|warning): (?P<msg>.*)$")
 FLAG = re.compile(r"\[-W(?:error=)?([\w-]+)\]$")
-QUOTED = re.compile(r"[‘'\"`][^’'\"`]*[’'\"`]")
+QUOTED = re.compile(r"[â€˜'\"`][^â€™'\"`]*[â€™'\"`]")
 NUMBER = re.compile(r"\b\d+\b")
 
 
@@ -142,7 +142,7 @@ def compile_unit(unit, decomp, out_dir, use_compat):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--objects", type=Path, default=ROOT / "build" / "objects.json")
-    ap.add_argument("--groups", default="game,library")
+    ap.add_argument("--groups", default="game,library,sdk")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--no-compat", action="store_true")
     ap.add_argument("--only", default=None)

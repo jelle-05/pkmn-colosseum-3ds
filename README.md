@@ -22,8 +22,14 @@ Status
   for the 617 symbols that are still missing. In Azahar it starts and runs
   until the first SDK call. See [docs/COMPILE_SURVEY.md](docs/COMPILE_SURVEY.md)
   and [docs/LINK_PROBE.md](docs/LINK_PROBE.md).
-- Phase 2 (platform layer): next. The work list is
+- Phase 2 (platform layer): started. OS, ARAM and DVD basics are in, and the
+  boot runs through main() and the start of the game's init until GXInit.
+  See [docs/BOOT_PROGRESS.md](docs/BOOT_PROGRESS.md). The full work list is
   [docs/PLATFORM_TODO.txt](docs/PLATFORM_TODO.txt).
+
+To run the probe build you need your own GC6E01 disc image at
+`sdmc:/3ds/colosseum/GC6E01.iso` (for Azahar:
+`%APPDATA%\Azahar\sdmc\3ds\colosseum\GC6E01.iso`).
 
 The target is the New 3DS. The Old 3DS is probably too slow.
 

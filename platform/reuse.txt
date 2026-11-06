@@ -1,0 +1,17 @@
+# SDK units from the decomp that the port compiles as they are.
+#
+# These come from the "replaced" group (the Dolphin SDK), but they are plain
+# C with no hardware access, so the original code is the best implementation.
+# tools/gen_objects.py moves every unit listed here into the "sdk" group,
+# which tools/unify_prototypes.py compiles like game code. One source path
+# per line, as in objects.json.
+
+# OS: arena and heap allocator
+src/dolphin/os/OSArena.c
+src/dolphin/sdk_range_8009A9D8.c
+src/dolphin/sdk_exact_8009ABD0.c
+src/dolphin/sdk_candidate_8009AC50.c
+src/dolphin/sdk_exact_8009AFD0.c
+
+# OS: calendar conversion (reads the timer clock through low memory)
+src/dolphin/os/calendar/OSTime.c

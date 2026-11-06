@@ -254,6 +254,43 @@ def statements(text, with_top=False):
             start = e
 
 
+def strip_asm_functions(text, unit, stats):
+    """Remove MWCC `asm` function definitions, keeping the rest of the unit.
+
+    A unit with one first-party assembly routine (GSmathInit, the thread
+    switch) otherwise fails as a whole, taking hundreds of lines of C with
+    it. The removed functions are recorded; their C versions live in
+    platform/src/game_asm/."""
+    out, pos = [], 0
+    for s, e, head, depth, kind in statements(text):
+        if kind != "def" or depth != 0:
+            continue
+        h = clean(PP_LINE.sub(" ", head))
+        if not re.match(r"^(static\s+|inline\s+)*asm\b", h):
+            continue
+        m = re.search(r"(\w+)\s*\(", h)
+        d = 0
+        end = None
+        for kind_, val, ts, te in tokens(text[e:]):
+            if val == "{":
+                d += 1
+            elif val == "}":
+                d -= 1
+                if d == 0:
+                    end = e + te
+                    break
+        if end is None:
+            continue
+        # Keep the head's leading text (it may end the previous statement).
+        start = s + (len(head) - len(head.lstrip()))
+        out.append(text[pos:start])
+        out.append(re.sub(r"[^\n]", " ", text[start:end]))
+        pos = end
+        stats["asm_removed"][m.group(1) if m else "?"].add(unit["source"])
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def strip_extern_c(text):
     """Remove `extern "C" { ... }` wrappers. A few units are C files that
     MWCC compiled as C++ only to get C++'s .bss ordering."""
@@ -286,7 +323,10 @@ def preprocess(unit, decomp, out_dir):
            "-include", str(ROOT / "compat" / "mwcc_compat.h"),
            "-include", str(ROOT / "platform" / "include" / "port" / "gc_mem.h"),
            "-I", str(decomp), "-I", str(decomp / "include"),
-           str(decomp / unit["source"]), "-o", str(out)]
+           # The .cpp units are C in a C++ file (MWCC compiled them as C++
+           # for the name mangling and .bss order). Treat them as C; see
+           # mwcc_cxx_names() for the names.
+           "-x", "c", str(decomp / unit["source"]), "-o", str(out)]
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         return unit, None
@@ -785,7 +825,7 @@ def redirect_fixed_addresses(text, stats):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--objects", type=Path, default=ROOT / "build" / "objects.json")
-    ap.add_argument("--groups", default="game,library")
+    ap.add_argument("--groups", default="game,library,sdk")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--compile", action="store_true")
     ap.add_argument("--only", default=None)
@@ -795,7 +835,7 @@ def main():
     manifest = json.loads(args.objects.read_text(encoding="utf-8"))
     decomp = Path(manifest["decomp"]).resolve()
     groups = set(args.groups.split(","))
-    units = [u for u in manifest["units"] if u["group"] in groups and u["lang"] == "c"]
+    units = [u for u in manifest["units"] if u["group"] in groups]
 
     with ThreadPoolExecutor(args.jobs) as pool:
         pp = list(pool.map(lambda u: preprocess(u, decomp, args.out), units))
@@ -807,11 +847,12 @@ def main():
     stats = {"aliased_names": 0, "uses_renamed": 0, "calls_cast": 0,
              "static_fixed": 0, "implicit_views": 0, "hoisted": 0, "weak_inline": 0,
              "fifo_writes": 0, "fixed_addresses": 0, "fixed_address_exprs": 0,
+             "asm_removed": defaultdict(set),
              "narrowing": defaultdict(set), "float_abi": defaultdict(set),
              "float_unfixed": defaultdict(set)}
     work = [(u, t) for u, t in pp if not args.only or args.only in u["source"]]
     for u, text in work:
-        new = rewrite_unit(u, strip_extern_c(text), defs, stats)
+        new = rewrite_unit(u, strip_asm_functions(strip_extern_c(text), u, stats), defs, stats)
         new = redirect_fixed_addresses(new, stats)
         if u["module"] != "main":
             # Every REL defines its own _prolog/_epilog/_unresolved. Linked
@@ -834,6 +875,7 @@ def main():
         "narrowing": {k: sorted(v) for k, v in sorted(stats["narrowing"].items())},
         "float_abi_fixed": {k: sorted(v) for k, v in sorted(stats["float_abi"].items())},
         "float_abi_unfixed": {k: sorted(v) for k, v in sorted(stats["float_unfixed"].items())},
+        "asm_functions_removed": {k: sorted(v) for k, v in sorted(stats["asm_removed"].items())},
     }
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
@@ -845,6 +887,8 @@ def main():
     print(f"implicit-call views: {stats['implicit_views']}, extern-before-static fixed: "
           f"{stats['static_fixed']}, block-scope declarations hoisted: {stats['hoisted']}, "
           f"inline functions made weak: {stats['weak_inline']}")
+    print(f"asm functions removed (C versions belong in platform/src/game_asm): "
+          f"{', '.join(sorted(stats['asm_removed'])) or 'none'}")
     print(f"fixed GameCube addresses redirected: {stats['fixed_addresses']} constants, "
           f"{stats['fixed_address_exprs']} computed, {stats['fifo_writes']} GX FIFO writes")
     print(f"float ABI: {len(stats['float_abi'])} functions fixed, "
@@ -854,8 +898,85 @@ def main():
         compile_unified(work, args)
 
 
+MWCC_MANGLED = re.compile(r"^([A-Za-z_]\w*?)__(?:F|C?\d+[A-Za-z_])\w*$")
+
+
+def mwcc_cxx_names(decomp, unit_name):
+    """For a C++ unit built as C: plain name -> MWCC-mangled name, for every
+    symbol the original object only has in mangled form. That covers both
+    what the unit defines (others call logFloat2Str__FfPcPc) and what it
+    calls (it calls _toolentryAlloc__FUl, not _toolentryAlloc)."""
+    names = mwcc_symbols(decomp, unit_name)
+    plain = defaultdict(list)
+    for n in names:
+        m = MWCC_MANGLED.match(n)
+        if m and m.group(1) not in names:
+            plain[m.group(1)].append(n)
+    return {k: v[0] for k, v in plain.items() if len(v) == 1}
+
+
+def mwcc_symbols(decomp, unit_name):
+    """All symbol names (defined and undefined) in the decomp's MWCC object."""
+    objdiff = json.loads((decomp / "objdiff.json").read_text(encoding="utf-8"))["units"]
+    base = next((u.get("base_path") for u in objdiff if u["name"] == unit_name), None)
+    nm = decomp / "build" / "binutils" / "powerpc-eabi-nm.exe"
+    if not base or not (decomp / base).exists():
+        return set()
+    out = subprocess.run([str(nm), str(decomp / base)], capture_output=True, text=True).stdout
+    return {l.split()[-1] for l in out.splitlines() if l.split()}
+
+
+def compile_cxx(u, decomp, obj):
+    """Compile a real C++ unit with g++, then rename its GCC-mangled symbols
+    to what the rest of the game expects: the MWCC-mangled name where the
+    original object has one, otherwise the plain C name."""
+    bin_ = compile_check.DEVKITARM / "bin"
+    cmd = [str(bin_ / "arm-none-eabi-g++.exe"), *compile_check.ARCH, "-O1",
+           *[f for f in compile_check.SEMANTICS if f != "-fgnu89-inline"],
+           "-fpermissive", "-fno-exceptions", "-fno-rtti", "-fdiagnostics-plain-output", "-w",
+           "-DBUILD_VERSION=0", "-DVERSION_GC6E01", "-DNDEBUG=1", "-DPORT=1", "-D__3DS__",
+           *("-D" + d for d in u.get("defines", [])),
+           "-I", str(ROOT / "platform" / "include"),
+           "-include", str(ROOT / "compat" / "mwcc_compat.h"),
+           "-include", str(ROOT / "platform" / "include" / "port" / "gc_mem.h"),
+           "-I", str(decomp), "-I", str(decomp / "include"),
+           "-c", str(decomp / u["source"]), "-o", str(obj)]
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if p.returncode:
+        return [l for l in (p.stdout + p.stderr).splitlines() if ": error: " in l] or ["g++: error"]
+    nm = subprocess.run([str(bin_ / "arm-none-eabi-nm.exe"), str(obj)], capture_output=True, text=True).stdout
+    gcc_names = sorted({l.split()[-1] for l in nm.splitlines()
+                        if l.split() and l.split()[-1].startswith("_Z") and l.split()[-2] in "TDBRU"})
+    if not gcc_names:
+        return []
+    dem = subprocess.run([str(bin_ / "arm-none-eabi-c++filt.exe")], input="\n".join(gcc_names),
+                         capture_output=True, text=True).stdout.splitlines()
+    mwcc = mwcc_symbols(decomp, u["name"])
+    mangled_by_base = defaultdict(list)
+    for n in mwcc:
+        m = MWCC_MANGLED.match(n)
+        if m:
+            mangled_by_base[m.group(1)].append(n)
+    lines = []
+    for g, d in zip(gcc_names, dem):
+        base = re.sub(r"\(.*$", "", d).split("::")[-1].strip()
+        if base in mwcc:
+            target = base
+        elif len(mangled_by_base.get(base, [])) == 1:
+            target = mangled_by_base[base][0]
+        else:
+            target = base
+        lines.append(f"{g} {target}\n")
+    syms = obj.with_suffix(".redefine")
+    syms.write_text("".join(lines), encoding="utf-8")
+    q = subprocess.run([str(bin_ / "arm-none-eabi-objcopy.exe"), f"--redefine-syms={syms}", str(obj)],
+                       capture_output=True, text=True)
+    return ["objcopy: error: " + q.stderr.strip()] if q.returncode else []
+
+
 def compile_unified(pp, args):
     cc = compile_check.DEVKITARM / "bin" / "arm-none-eabi-gcc.exe"
+    decomp = Path(json.loads(args.objects.read_text(encoding="utf-8"))["decomp"]).resolve()
 
     def one(item):
         u, _ = item
@@ -870,7 +991,22 @@ def compile_unified(pp, args):
         text = p.stdout + p.stderr
         errs = [l for l in text.splitlines() if ": error: " in l]
         promo = sum(1 for l in text.splitlines() if "[-Wdouble-promotion]" in l)
-        return u, p.returncode == 0, errs, promo
+        if p.returncode != 0 and u["lang"] == "c++":
+            # Real C++ (templates, references): compile it as C++ instead.
+            cxx_errs = compile_cxx(u, decomp, obj)
+            if not cxx_errs:
+                return u, True, [], promo
+            errs = errs + cxx_errs
+        elif p.returncode == 0 and u["lang"] == "c++":
+            names = mwcc_cxx_names(decomp, u["name"])
+            if names:
+                syms = obj.with_suffix(".redefine")
+                syms.write_text("".join(f"{a} {b}\n" for a, b in sorted(names.items())), encoding="utf-8")
+                q = subprocess.run([str(compile_check.DEVKITARM / "bin" / "arm-none-eabi-objcopy.exe"),
+                                    f"--redefine-syms={syms}", str(obj)], capture_output=True, text=True)
+                if q.returncode:
+                    errs.append("objcopy: error: " + q.stderr.strip())
+        return u, p.returncode == 0 and not errs, errs, promo
 
     with ThreadPoolExecutor(args.jobs) as pool:
         res = list(pool.map(one, pp))

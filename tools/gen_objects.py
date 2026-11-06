@@ -11,6 +11,7 @@ writes, and sorts every unit into one of these groups:
 
   game       game code we compile (src/game, src/rel)
   library    third-party code we compile and adapt (src/hsd, src/musyx)
+  sdk        SDK units we compile as they are (listed in platform/reuse.txt)
   replaced   SDK, runtime and debugger code the platform layer replaces
   generated  units built from .json by a decomp tool; these need their own path
   skipped    assembly units
@@ -66,6 +67,11 @@ def main():
                  "with a built checkout at the same commit")
 
     units = json.loads(objdiff.read_text(encoding="utf-8"))["units"]
+    reuse_file = root / "platform" / "reuse.txt"
+    reuse = set()
+    if reuse_file.is_file():
+        reuse = {l.strip() for l in reuse_file.read_text(encoding="utf-8").splitlines()
+                 if l.strip() and not l.lstrip().startswith("#")}
     out = {"decomp": str(args.decomp), "units": []}
     groups = Counter()
     modules = Counter()
@@ -73,6 +79,11 @@ def main():
         meta = unit.get("metadata", {})
         source = meta.get("source_path")
         group = classify(source)
+        if source in reuse:
+            if group != "replaced":
+                sys.exit(f"platform/reuse.txt: {source} is not an SDK unit")
+            group = "sdk"
+            reuse.discard(source)
         module = unit["name"].split("/", 1)[0]
         groups[group] += 1
         modules[module] += 1
@@ -89,6 +100,8 @@ def main():
             "defines": defines,
         })
 
+    if reuse:
+        sys.exit("platform/reuse.txt lists sources that are not units: " + ", ".join(sorted(reuse)))
     if groups["unknown"]:
         bad = [u["source"] for u in out["units"] if u["group"] == "unknown"]
         sys.exit("unclassified sources: " + ", ".join(bad[:10]))
@@ -97,7 +110,7 @@ def main():
     args.output.write_text(json.dumps(out, indent=1) + "\n", encoding="utf-8")
 
     print(f"{len(units)} units -> {args.output}")
-    for group in ("game", "library", "replaced", "generated", "skipped"):
+    for group in ("game", "library", "sdk", "replaced", "generated", "skipped"):
         print(f"  {group:<10} {groups[group]}")
     print(f"  modules    {len(modules)} (main + {len(modules) - 1} RELs)")
 
