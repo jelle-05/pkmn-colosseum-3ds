@@ -3,6 +3,8 @@ pkmn-colosseum-3ds
 
 A native Nintendo 3DS port of Pokémon Colosseum, built on the
 [pkmn-colosseum](https://github.com/dougchansan/pkmn-colosseum) decompilation.
+The `decomp/` submodule points to [my fork](https://github.com/jelle-05/pkmn-colosseum)
+of it.
 
 This is an early work in progress. Nothing runs yet. The plan and the current
 state are in the decomp's [docs/3DS_PORT_ROADMAP.md](decomp/docs/3DS_PORT_ROADMAP.md).
@@ -74,8 +76,21 @@ Notes
 Credits
 -------
 
-The decompilation is the work of the pkmn-colosseum contributors. See
-`decomp/README.md` and `decomp/NOTICE`.
+This port would not be possible without the decompilation. All of the game code
+in `decomp/` is their work:
+
+- [dougchansan/pkmn-colosseum](https://github.com/dougchansan/pkmn-colosseum),
+  the original decompilation, and its contributors
+- [chasem-dev/pkmn-colosseum](https://github.com/chasem-dev/pkmn-colosseum),
+  the fork my fork is based on
+- [jelle-05/pkmn-colosseum](https://github.com/jelle-05/pkmn-colosseum), my fork,
+  with a Windows build fix and the 3DS roadmap
+
+The decompilation is MIT licensed. See `decomp/LICENSE`, `decomp/NOTICE` and
+`decomp/README.md` for the full credits, including the third-party libraries it
+reconstructs.
+
+Thanks also to the devkitPro, libctru and citro3d developers.
 
 Pokémon Colosseum is © 2003–2004 Pokémon / Nintendo / Creatures / GAME FREAK /
 Genius Sonority. This project is not affiliated with or endorsed by any of them.
