@@ -26,6 +26,7 @@ checkout that has been built at the same commit.
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -33,6 +34,7 @@ from pathlib import Path
 REPLACED_PREFIXES = ("src/dolphin/", "src/crt", "src/trk/")
 LIBRARY_PREFIXES = ("src/hsd/", "src/musyx/")
 GAME_PREFIXES = ("src/game/", "src/rel/")
+GLOBAL_DEFINES = {"BUILD_VERSION=0", "VERSION_GC6E01", "NDEBUG=1"}
 
 
 def classify(source):
@@ -74,12 +76,17 @@ def main():
         module = unit["name"].split("/", 1)[0]
         groups[group] += 1
         modules[module] += 1
+        # Some units select part of a shared .c file with a -D from
+        # configure.py's extra_cflags. Keep those; drop the global ones.
+        flags = unit.get("scratch", {}).get("c_flags", "")
+        defines = [d for d in re.findall(r"-D(\S+)", flags) if d not in GLOBAL_DEFINES]
         out["units"].append({
             "name": unit["name"],
             "module": module,
             "source": source,
             "group": group,
             "lang": "c++" if source and source.endswith(".cpp") else "c",
+            "defines": defines,
         })
 
     if groups["unknown"]:

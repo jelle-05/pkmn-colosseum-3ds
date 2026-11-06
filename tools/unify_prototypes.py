@@ -82,6 +82,7 @@ DECL = re.compile(
     r"\((?P<params>[^()]*(?:\([^()]*\)[^()]*)*)\)\s*(?P<attr>(?:__attribute__\s*\(\(.*\)\)\s*)*)$",
     re.S)
 TYPEDEF = re.compile(r"\btypedef\s+([^;{}()]+?)\s+(\w+)\s*;")
+IDENT = re.compile(r"[A-Za-z_]\w*")
 STORAGE = re.compile(r"\b(extern|static|inline|__inline__|__inline|register|const|volatile)\b")
 
 
@@ -217,28 +218,59 @@ def view_key(d):
 
 # ---------------------------------------------------------------- statements
 
-def statements(text):
+def statements(text, with_top=False):
     """Yield (start, end, head, depth, kind) for declarations and definition
-    heads. kind is 'decl' (ends with ;) or 'def' (head before a {)."""
+    heads. kind is 'decl' (ends with ;) or 'def' (head before a {). With
+    with_top, also yield the start of the enclosing top-level head."""
     depth = paren = 0
     start = 0
+    top = 0
+    last_paren_start = 0    # last top-level statement with a '(' in it
     for kind, val, s, e in tokens(text):
         if kind != "p":
             continue
         if val == "(":
+            if depth == 0 and paren == 0:
+                last_paren_start = start
             paren += 1
         elif val == ")":
             paren -= 1
         elif paren == 0 and val == "{":
-            yield start, s, text[start:s], depth, "def"
+            if depth == 0:
+                # K&R definitions put `type param;` lines between the
+                # declarator and the body; the function starts at the
+                # declarator.
+                top = start if "(" in text[start:s] else last_paren_start
+            item = (start, s, text[start:s], depth, "def")
+            yield item + ((top,) if with_top else ())
             depth += 1
             start = e
         elif paren == 0 and val == "}":
             depth -= 1
             start = e
         elif paren == 0 and val == ";":
-            yield start, e, text[start:s], depth, "decl"
+            item = (start, e, text[start:s], depth, "decl")
+            yield item + ((top if depth else start,) if with_top else ())
             start = e
+
+
+def strip_extern_c(text):
+    """Remove `extern "C" { ... }` wrappers. A few units are C files that
+    MWCC compiled as C++ only to get C++'s .bss ordering."""
+    while True:
+        m = re.search(r'extern\s+"C"\s*\{', text)
+        if not m:
+            return text
+        depth, i = 1, m.end()
+        for kind, val, s, e in tokens(text[m.end():]):
+            if val == "{":
+                depth += 1
+            elif val == "}":
+                depth -= 1
+                if depth == 0:
+                    i = m.end() + s
+                    break
+        text = text[:m.start()] + " " * (m.end() - m.start()) + text[m.end():i] + " " + text[i + 1:]
 
 
 # ---------------------------------------------------------------- passes
@@ -249,6 +281,7 @@ def preprocess(unit, decomp, out_dir):
     cc = compile_check.DEVKITARM / "bin" / "arm-none-eabi-gcc.exe"
     cmd = [str(cc), *compile_check.ARCH, *compile_check.SEMANTICS, "-E", "-std=gnu99",
            "-DBUILD_VERSION=0", "-DVERSION_GC6E01", "-DNDEBUG=1", "-DPORT=1", "-D__3DS__",
+           *("-D" + d for d in unit.get("defines", [])),
            "-I", str(ROOT / "platform" / "include"),
            "-include", str(ROOT / "compat" / "mwcc_compat.h"),
            "-I", str(decomp), "-I", str(decomp / "include"),
@@ -323,10 +356,47 @@ OBJ_DEF = re.compile(r"^(?:(?:const|volatile|static)\s+)*(?:[A-Za-z_]\w*[\s\*]+)
 def rewrite_unit(u, text, defs, stats):
     tds = typedef_table(text)
     # 1. Find declarations and definitions.
+    # MWCC lets a block-scope extern declaration stay visible for the rest
+    # of the file, as pre-standard compilers did. C limits it to the block.
+    # Such declarations are hoisted to just before the enclosing top-level
+    # definition, which gives GCC the same visibility. `hoist` maps a
+    # declaration's start to that insertion point.
     decls = []          # (start, end, name, view, depth, d, kind)
+    hoist = {}
     static_defs = set()
     obj_defs = set()
+    # Where each typedef becomes visible at file scope. A declaration that
+    # uses a type declared inside a function cannot be hoisted.
+    file_typedef_at = {}
+    type_names = set(tds)
+    pending = {}            # depth -> True after `typedef struct ... {`
     for s, e, head, depth, kind in statements(text):
+        h = clean(PP_LINE.sub(" ", head))
+        if kind == "def":
+            if h.startswith("typedef"):
+                pending[depth] = True
+            continue
+        if pending.pop(depth, False):
+            # `} Name, *PName;` closes a braced typedef.
+            for name in IDENT.findall(h):
+                type_names.add(name)
+                if depth == 0:
+                    file_typedef_at.setdefault(name, s)
+            continue
+        m = TYPEDEF.search(h + ";")
+        if m:
+            type_names.add(m.group(2))
+            if depth == 0:
+                file_typedef_at.setdefault(m.group(2), s)
+
+    def hoistable(head, top):
+        for ident in IDENT.findall(PP_LINE.sub(" ", head)):
+            if ident in type_names and file_typedef_at.get(ident, 1 << 60) > top:
+                return False
+        return True
+
+    decl_depth = {}
+    for s, e, head, depth, kind, top in statements(text, with_top=True):
         d = parse_head(head, tds, depth > 0)
         if d:
             if kind == "def" and depth != 0:
@@ -335,13 +405,28 @@ def rewrite_unit(u, text, defs, stats):
                 if kind == "def":
                     static_defs.add(d["name"])
                 continue
-            decls.append((s, e, d["name"], view_key(d), depth, d, kind))
+            eff = depth
+            if depth and hoistable(head, top):
+                hoist[s] = top
+                eff = 0
+            decls.append((s, e, d["name"], view_key(d), eff, d, kind))
+            continue
+        if kind == "def" and depth == 0:
+            h = clean(PP_LINE.sub(" ", head))
+            if h.endswith("=") and not h.startswith(("typedef", "extern")):
+                m = OBJ_DEF.match(h[:-1].strip())
+                if m:
+                    obj_defs.add(m.group(1))   # object with an initializer
             continue
         if kind == "decl":
             o = parse_object(head)
             if o:
                 o["object"] = True
-                decls.append((s, e, o["name"], o["head"], depth, o, "decl"))
+                eff = depth
+                if depth and hoistable(head, top):
+                    hoist[s] = top
+                    eff = 0
+                decls.append((s, e, o["name"], o["head"], eff, o, "decl"))
             elif depth == 0:
                 h = clean(PP_LINE.sub(" ", head))
                 if h and not h.startswith(("typedef", "extern", "struct", "union", "enum")):
@@ -436,13 +521,47 @@ def rewrite_unit(u, text, defs, stats):
         new = f"extern {clean(ret)} {raw}({ptxt}) {d['attr']}__asm__(\"{name}\");"
         plan[s] = {"end": e, "text": new, "name": name, "target": target, "raw": raw, "cast": cast}
 
-    if not plan and not alias_of:
+    # Hoisted declarations: blank them in place, insert before their function.
+    inserts = defaultdict(list)
+    # MWCC gives out-of-line copies of plain `inline` functions shared
+    # linkage; with -fgnu89-inline every unit emits one. GCC ignores `weak`
+    # on an inline function, so drop the `inline` and make the definition
+    # weak: the linker keeps one copy and a strong definition still wins.
+    # (`extern inline` is inline-only in gnu89 and emits nothing.)
+    drop = set()
+    for (s, e, name, view, depth, d, kind) in decls:
+        if kind != "def" or re.search(r"\bextern\b", d["ret"]):
+            continue
+        if not re.search(r"\b(inline|__inline__|__inline)\b", d["ret"]):
+            continue
+        for kind_, val, ts, te in tokens(text[s:e]):
+            if val in ("inline", "__inline__", "__inline"):
+                drop.add(s + ts)
+        inserts[s].append("__attribute__((weak))")
+        stats["weak_inline"] += 1
+    for (s, e, name, view, depth, d, kind) in decls:
+        if s not in hoist:
+            continue
+        p = plan.get(s) or {"end": e, "name": name, "target": name, "raw": name, "cast": None,
+                            "text": clean(PP_LINE.sub(" ", text[s:e]))}
+        new = p["text"]
+        if name in static_defs:
+            new = ""            # the static definition follows; keep it local
+        inserts[hoist[s]].append(new)
+        p = dict(p, text="")
+        plan[s] = p
+        stats["hoisted"] += 1
+
+    if not plan and not alias_of and not inserts:
         return text
 
     # 4. Walk tokens, keep track of the visible declaration per name, rename
     # uses. A use with no visible declaration is an implicit declaration
     # (int f()); give it its own view so a later declaration cannot clash.
-    events = sorted(((x[1], x[2], x[0]) for x in decls if x[6] == "decl"), key=lambda t: t[0])
+    events = sorted(((hoist.get(x[0], x[1]), x[2], x[0], x[4] == 0) for x in decls
+                     if x[6] == "decl"), key=lambda t: t[0])
+    ins_points = sorted(inserts)
+    ii = 0
     def_events = sorted(((x[1], x[2]) for x in decls if x[6] == "def"), key=lambda t: t[0])
     implicit = set()
     # Ranges of each declaration or definition head, so the declared name
@@ -463,9 +582,19 @@ def rewrite_unit(u, text, defs, stats):
     pi = 0
     while i < len(toks):
         kind, val, s, e = toks[i]
+        while ii < len(ins_points) and ins_points[ii] <= s:
+            at = ins_points[ii]
+            if at >= pos:
+                out.append(text[pos:at])
+                pos = at
+            out.append(" ".join(t for t in inserts[at] if t) + " ")
+            ii += 1
         while ev < len(events) and events[ev][0] <= s:
-            end, name, start = events[ev]
-            scope[-1][name] = start
+            end, name, start, filescope = events[ev]
+            # File-scope (and hoisted) declarations are visible in all open
+            # scopes; the rest only in the current block.
+            for sc in (scope if filescope else scope[-1:]):
+                sc[name] = start
             ev += 1
         while dv < len(def_events) and def_events[dv][0] <= s:
             scope[0][def_events[dv][1]] = "def"
@@ -485,6 +614,11 @@ def rewrite_unit(u, text, defs, stats):
             pos = p["end"]
             while i < len(toks) and toks[i][2] < p["end"]:
                 i += 1
+            continue
+        if s in drop:
+            out.append(text[pos:s])
+            pos = e
+            i += 1
             continue
         if kind == "p" and val == "{":
             scope.append(dict(scope[-1]))
@@ -562,12 +696,18 @@ def main():
     defs, clash = collect_definitions(pp)
 
     stats = {"aliased_names": 0, "uses_renamed": 0, "calls_cast": 0,
-             "static_fixed": 0, "implicit_views": 0,
+             "static_fixed": 0, "implicit_views": 0, "hoisted": 0, "weak_inline": 0,
              "narrowing": defaultdict(set), "float_abi": defaultdict(set),
              "float_unfixed": defaultdict(set)}
     work = [(u, t) for u, t in pp if not args.only or args.only in u["source"]]
     for u, text in work:
-        new = rewrite_unit(u, text, defs, stats)
+        new = rewrite_unit(u, strip_extern_c(text), defs, stats)
+        if u["module"] != "main":
+            # Every REL defines its own _prolog/_epilog/_unresolved. Linked
+            # statically they need distinct names; the platform's OSLink
+            # table calls <module>__prolog and so on.
+            new = re.sub(r"\b(_prolog|_epilog|_unresolved)\b",
+                         lambda m: f"{u['module']}_{m.group(1)}", new)
         dst = args.out / "src" / (u["name"] + ".i")
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(new, encoding="utf-8")
@@ -592,7 +732,8 @@ def main():
           f"{stats['uses_renamed']} uses renamed")
     print(f"narrowing views: {len(stats['narrowing'])} functions, {stats['calls_cast']} calls cast")
     print(f"implicit-call views: {stats['implicit_views']}, extern-before-static fixed: "
-          f"{stats['static_fixed']}")
+          f"{stats['static_fixed']}, block-scope declarations hoisted: {stats['hoisted']}, "
+          f"inline functions made weak: {stats['weak_inline']}")
     print(f"float ABI: {len(stats['float_abi'])} functions fixed, "
           f"{len(stats['float_unfixed'])} unprototyped without a known definition")
 

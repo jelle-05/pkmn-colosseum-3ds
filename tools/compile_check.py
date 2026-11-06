@@ -98,7 +98,8 @@ def compile_unit(unit, decomp, out_dir, use_compat):
            "-fdiagnostics-plain-output", "-fno-diagnostics-show-caret",
            "-fmax-errors=50", *PERMISSIVE,
            "-Wdouble-promotion",
-           "-DBUILD_VERSION=0", "-DVERSION_GC6E01", "-DNDEBUG=1", "-DPORT=1", "-D__3DS__"]
+           "-DBUILD_VERSION=0", "-DVERSION_GC6E01", "-DNDEBUG=1", "-DPORT=1", "-D__3DS__",
+           *("-D" + d for d in unit.get("defines", []))]
     if use_compat:
         # Platform overrides must win over the decomp's headers.
         cmd += ["-I", str(ROOT / "platform" / "include"),
