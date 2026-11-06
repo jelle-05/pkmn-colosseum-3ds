@@ -17,8 +17,9 @@ Status
 ------
 
 - Phase 0 (matching baseline): done. The decomp builds and matches on Windows.
-- Phase 1 (compile the game code for the host and the 3DS): started.
-  `tools/gen_objects.py` produces the object list.
+- Phase 1 (compile the game code for the host and the 3DS): started. 1,871 of
+  1,898 game and library units compile with devkitARM. Nothing links yet. See
+  [docs/COMPILE_SURVEY.md](docs/COMPILE_SURVEY.md).
 
 The target is the New 3DS. The Old 3DS is probably too slow.
 
@@ -41,7 +42,11 @@ instead:
 
     python tools/gen_objects.py --decomp ../pkmn-colosseum
 
-The output goes to `build/objects.json`.
+The output goes to `build/objects.json`. Then, to compile everything for the
+3DS and see what breaks:
+
+    python tools/compile_check.py
+    python tools/unify_prototypes.py --compile
 
 
 Requirements
@@ -58,8 +63,10 @@ Layout
 
     decomp/      the decompilation (submodule, do not edit here)
     tools/       build helpers
-    platform/    SDK replacement: OS, DVD, GX, PAD, CARD, audio (planned)
-    compat/      MWCC compatibility headers (planned)
+    platform/    SDK replacement: OS, DVD, GX, PAD, CARD, audio (header
+                 overrides so far)
+    compat/      MWCC compatibility header, force-included in every unit
+    docs/        notes and measurements
     swap/        endian swappers for game file formats (planned)
     patches/     small, documented changes to decomp sources (planned)
 
