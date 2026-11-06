@@ -274,7 +274,15 @@ def load_data_types(path):
                 sizes += [FIELD_SIZE[kind]] * int(count or 1)
             layouts[m.group(1)] = sizes
             continue
-        sym, name = line.split()
+        parts = line.split()
+        if parts[0] == "typed":
+            # typed SYMBOL ELEMENT_SIZE LAYOUT
+            sym, elem, name = parts[1], int(parts[2]), parts[3]
+            if name not in layouts:
+                sys.exit(f"data_types: unknown layout {name}")
+            out[sym] = ("typed", elem, layouts[name])
+            continue
+        sym, name = parts
         if name not in layouts:
             sys.exit(f"data_types.txt: unknown layout {name}")
         out[sym] = layouts[name]
@@ -284,9 +292,39 @@ def load_data_types(path):
 INT_LIT = re.compile(r"0[xX][0-9A-Fa-f]+|\d+")
 
 
+def retype_typed(text, sym, elem, sizes, stats):
+    """A typed array the code reads with narrower widths. Rebuild its values
+    so that, stored little-endian, memory holds what the code expects: the
+    original big-endian bytes, with each multi-byte field of the layout in
+    native order."""
+    m = re.search(r"\b" + re.escape(sym) + r"(?:__pv\d+)?\s*\[[^\]]*\]\s*(?:__attribute__\(\([^)]*\)\)\s*)?=\s*\{", text)
+    if not m:
+        return text
+    end = text.find("}", m.end())
+    body = text[m.end():end]
+    if re.search(r"\d\.\d|[eE][+-]?\d|\bf\b", body):
+        return text              # float literals: not handled here
+    mask = (1 << (8 * elem)) - 1
+    values = [int(v, 0) & mask for v in INT_LIT.findall(body)]
+    be = b"".join(v.to_bytes(elem, "big") for v in values)
+    out, pos = bytearray(), 0
+    while pos < len(be):
+        for size in sizes:
+            field = be[pos:pos + size]
+            out += field[::-1] if size > 1 else field
+            pos += size
+    new = [int.from_bytes(out[i:i + elem], "little") for i in range(0, len(out), elem)]
+    text = text[:m.end()] + " " + ", ".join(f"0x{v:0{elem * 2}X}u" for v in new) + " " + text[end:]
+    stats["data_retyped"] += 1
+    return text
+
+
 def retype_data(text, types, stats):
     """Reverse the bytes of each multi-byte field in listed byte arrays."""
     for sym, sizes in types.items():
+        if isinstance(sizes, tuple):
+            text = retype_typed(text, sym, sizes[1], sizes[2], stats)
+            continue
         # The definition may carry an alias name (sym__pvN) bound by label.
         m = re.search(r"\b" + re.escape(sym) + r"(?:__pv\d+)?\s*\[[^\]]*\]\s*(?:__attribute__\(\([^)]*\)\)\s*)?=\s*\{", text)
         if not m:
@@ -905,7 +943,10 @@ def main():
              "narrowing": defaultdict(set), "float_abi": defaultdict(set),
              "float_unfixed": defaultdict(set)}
     work = [(u, t) for u, t in pp if not args.only or args.only in u["source"]]
-    data_types = load_data_types(ROOT / "platform" / "data_types.txt")
+    # Layouts derived by tools/access_widths.py, then the hand-written ones,
+    # which win for any symbol in both.
+    data_types = load_data_types(ROOT / "platform" / "data_types.generated.txt")
+    data_types.update(load_data_types(ROOT / "platform" / "data_types.txt"))
     for u, text in work:
         new = rewrite_unit(u, strip_asm_functions(strip_extern_c(text), u, stats), defs, stats)
         new = redirect_fixed_addresses(new, stats)
