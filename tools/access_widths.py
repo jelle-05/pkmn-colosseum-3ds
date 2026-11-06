@@ -138,14 +138,20 @@ class Analysis:
         self.forwards = []                    # (caller, caller_param, off, callee, callee_param)
         self.global_ptrs = defaultdict(set)   # (global sym, off) -> {(sym, off)}
         self.data_ptrs = data_ptrs            # (container, off) -> (target, addend)
+        self.returns = {}                     # func -> pointer value it returns in r3
+        self.new_returns = defaultdict(list)  # collected during a pass
+        self.aliases = []                     # (dst syms, dst off, n, src syms, src off)
         self.table = defaultdict(list)        # container -> [(off, target, addend)]
         for (c, o), (t, a) in data_ptrs.items():
             self.table[c].append((o, t, a))
 
     def record(self, v, disp, w, fname, copy=False):
         _, syms, off, stride = v
+        # Through a pointer that may point at several symbols, the access
+        # is weaker evidence for each of them.
+        tag = " [copy]" if copy else (" [multi]" if len(syms) > 1 else "")
         for s in syms:
-            self.access[s].append((off + disp, w, stride, fname + (" [copy]" if copy else "")))
+            self.access[s].append((off + disp, w, stride, fname + tag))
 
     def load_pointer(self, v, disp):
         """A 4-byte load through pointer v: does it read a pointer from a
@@ -195,6 +201,11 @@ class Analysis:
                     incs[mm.group(2)].add(int(mm.group(1)))
                     defs[mm.group(2)] += 1
         regs = {f"r{3 + i}": ("param", i, 0, None) for i in range(8)}
+        # The stack frame is a pseudo-symbol, so struct copies into locals
+        # can be traced back to their source.
+        stack = ("ptr", frozenset([f"STACK:{fname}"]), 0, None)
+        regs["r1"] = stack
+        copysrc = {}                          # reg -> (syms, off) of a copy load
 
         # A load whose register is next used by a store of the same width
         # is a copy (struct assignment), not a field read.
@@ -213,9 +224,9 @@ class Analysis:
             regs.pop(r, None)
 
         def at_label():
-            kept = {}
+            kept = {"r1": regs.get("r1", stack)}
             for r, v in regs.items():
-                if v[0] not in ("ptr", "param"):
+                if v[0] not in ("ptr", "param") or r == "r1":
                     continue
                 n_inc = len(incs.get(r, ()))
                 if defs[r] <= 1:
@@ -226,10 +237,40 @@ class Analysis:
                         kept[r] = (v[0], v[1], v[2], step)    # a pointer walking an array
             return kept
 
-        for i, (a, m, ops, rel) in enumerate(insns):
-            if a in targets:
-                regs = at_label()
+        # Forward branches carry their register state to the target, where
+        # all incoming states are merged; loop heads (targets of backward
+        # branches) also go through the single-definition rule above.
+        back = set()
+        for a, m, ops, rel in insns:
             bm = m.rstrip(".")
+            if bm.startswith("b") and bm not in ("bl", "bla", "bctrl", "blrl") and ops \
+                    and re.fullmatch(r"[0-9a-f]+", ops[-1]) and int(ops[-1], 16) <= a:
+                back.add(int(ops[-1], 16))
+        pending = defaultdict(list)
+        dead = False
+
+        for i, (a, m, ops, rel) in enumerate(insns):
+            bm = m.rstrip(".")
+            if a in targets:
+                incoming = pending.pop(a, [])
+                if not dead:
+                    incoming.append(regs)
+                regs = merge_states(incoming)
+                if a in back:
+                    regs = at_label()
+                regs.setdefault("r1", stack)
+                dead = False
+            elif dead:
+                regs = {"r1": stack}
+            # ---- branches within the function
+            if bm.startswith("b") and bm not in ("bl", "bla", "bctrl", "blrl", "blr", "bctr") and ops \
+                    and re.fullmatch(r"[0-9a-f]+", ops[-1]):
+                t = int(ops[-1], 16)
+                if t > a:
+                    pending[t].append(dict(regs))
+                if bm == "b":
+                    dead = True
+                continue
             # ---- address formation
             if bm == "lis" and rel and rel[0] == "R_PPC_ADDR16_HA":
                 regs[ops[0]] = ("ha", rel[1], rel[2])
@@ -237,6 +278,12 @@ class Analysis:
             # li rD, sym@sda21 is addi rD, r13, sym: a small-data pointer.
             if bm == "li" and len(ops) == 2 and rel and rel[0] == "R_PPC_EMB_SDA21":
                 regs[ops[0]] = ("ptr", frozenset([rel[1]]), rel[2], None)
+                continue
+            if bm == "li" and len(ops) == 2 and not rel:
+                try:
+                    regs[ops[0]] = ("const", int(ops[1], 0))
+                except ValueError:
+                    kill(ops[0])
                 continue
             if bm == "addis" and len(ops) == 3 and not rel:
                 v = regs.get(ops[1])
@@ -322,9 +369,16 @@ class Analysis:
                     disp, rb = int(mm.group(1)), mm.group(2)
                     v = regs.get(rb)
                     loaded = None
+                    if bm in STORES and ops[0] in copysrc and v and v[0] == "ptr" and v[3] is None:
+                        # The store half of a copy: destination <- source.
+                        ssyms, soff, sw = copysrc.pop(ops[0])
+                        if sw == w:
+                            self.aliases.append((v[1], v[2] + disp, w, ssyms, soff))
                     if v and v[0] == "ptr":
                         copy = bm not in STORES and w >= 4 and is_copy(i, ops[0], w)
                         self.record(v, disp, w, fname, copy)
+                        if copy and v[3] is None:
+                            copysrc[ops[0]] = (v[1], v[2] + disp, w)
                         if bm not in STORES and w == 4:
                             loaded = self.load_pointer(v, disp)
                     elif v and v[0] == "param":
@@ -377,24 +431,122 @@ class Analysis:
                 continue
             # ---- calls
             if bm == "bl" and rel and rel[0] == "R_PPC_REL24":
-                for i in range(8):
-                    v = regs.get(f"r{3 + i}")
+                callee = rel[1]
+                args = [regs.get(f"r{3 + k}") for k in range(8)]
+                for k, v in enumerate(args):
                     if v and v[0] == "ptr":
-                        self.calls.append((rel[1], i, v[1], v[2], v[3], fname))
+                        self.calls.append((callee, k, v[1], v[2], v[3], fname))
                     elif v and v[0] == "param":
-                        self.forwards.append((fname, v[1], v[2], rel[1], i))
+                        self.forwards.append((fname, v[1], v[2], callee, k))
+                # memcpy(dst, src, n) with a known size is a copy.
+                if callee in ("memcpy", "memmove") and args[0] and args[1] and args[2] \
+                        and args[0][0] == "ptr" and args[1][0] == "ptr" and args[2][0] == "const" \
+                        and args[0][3] is None and args[1][3] is None:
+                    self.aliases.append((args[0][1], args[0][2], args[2][1], args[1][1], args[1][2]))
                 for r_ in VOLATILE:
                     kill(r_)
+                copysrc.clear()
+                # A pointer the callee returns, from the previous pass.
+                rv = self.returns.get(callee)
+                if rv and rv[0] == "ptr":
+                    regs["r3"] = rv
+                elif rv and rv[0] == "param":
+                    a_ = args[rv[1]] if rv[1] < len(args) else None
+                    if a_ and a_[0] == "ptr":
+                        regs["r3"] = ("ptr", a_[1], a_[2] + rv[2], rv[3] if rv[3] is not None else a_[3])
                 continue
-            if bm in ("b", "blr", "bctr", "bctrl", "blrl"):
-                if bm in ("bctrl", "blrl"):
+            if bm == "blr":
+                v = regs.get("r3")
+                if v and v[0] in ("ptr", "param") and not any(s.startswith("STACK:") for s in
+                                                                  (v[1] if v[0] == "ptr" else ())):
+                    self.new_returns[fname].append(v)
+                elif v and v[0] == "const" and v[1] == 0:
+                    pass                                 # returning NULL agrees with any pointer
+                else:
+                    self.new_returns[fname].append(("other",))
+                regs = {"r1": stack}
+                dead = True
+                continue
+            if bm in ("bctr", "bctrl", "blrl"):
+                if bm == "bctr":
+                    regs = {"r1": stack}
+                    dead = True
+                else:
                     for r_ in VOLATILE:
                         kill(r_)
-                else:
-                    regs = {}
                 continue
             if ops and re.fullmatch(r"r\d+", ops[0]) and not bm.startswith(("cmp", "tw", "mt", "st", "b")):
                 kill(ops[0])
+
+
+def merge_states(states):
+    """Register state where control flow joins: keep what all paths agree
+    on. NULL (const 0) agrees with a pointer; pointers at the same offset
+    merge into one pointer to any of their symbols."""
+    if not states:
+        return {}
+    if len(states) == 1:
+        return dict(states[0])
+    out = {}
+    for r in set().union(*states):
+        vals = [s.get(r) for s in states]
+        if any(v is None for v in vals):
+            continue
+        nonnull = [v for v in vals if not (v[0] == "const" and v[1] == 0)]
+        if not nonnull:
+            out[r] = ("const", 0)
+            continue
+        first = nonnull[0]
+        if all(v == first for v in nonnull):
+            out[r] = first
+        elif all(v[0] == "ptr" for v in nonnull) and len({(v[2], v[3]) for v in nonnull}) == 1:
+            out[r] = ("ptr", frozenset().union(*(v[1] for v in nonnull)), first[2], first[3])
+    return out
+
+
+def merge_returns(collected, previous):
+    """One returned pointer per function, if all its returns agree."""
+    out = dict(previous)
+    for f, vals in collected.items():
+        if any(v[0] == "other" for v in vals):
+            out.pop(f, None)
+            continue
+        kinds = {(v[0],) + ((v[2], v[3]) if v[0] == "ptr" else (v[1], v[2], v[3])) for v in vals}
+        if len(kinds) != 1:
+            out.pop(f, None)
+            continue
+        v0 = vals[0]
+        if v0[0] == "ptr":
+            syms = frozenset().union(*(v[1] for v in vals))
+            out[f] = ("ptr", syms, v0[2], v0[3])
+        else:
+            out[f] = v0
+    return out
+
+
+def propagate_copies(an, rounds=3):
+    """Carry field accesses on a copy (stack local, global) back to the
+    data it was copied from."""
+    moved = 0
+    for _ in range(rounds):
+        added = []
+        for dst_syms, doff, n, src_syms, soff in an.aliases:
+            for d in dst_syms:
+                for (o, w, s, where) in an.access.get(d, ()):
+                    if where.endswith("[copy]") or s is not None:
+                        continue
+                    if doff <= o and o + w <= doff + n:
+                        for src in src_syms:
+                            added.append((src, (soff + (o - doff), w, None, where + " (via copy)")))
+        seen = 0
+        for src, acc in added:
+            if acc not in an.access[src]:
+                an.access[src].append(acc)
+                seen += 1
+        moved += seen
+        if not seen:
+            break
+    return moved
 
 
 def param_profiles(an):
@@ -495,13 +647,47 @@ def typed_arrays(decomp):
     return out
 
 
+def is_weak(where):
+    return "(via copy)" in where or where.endswith("[multi]")
+
+
 def layout_for(size, accesses):
-    """-> (layout or None, reason)"""
-    width = [0] * size
+    """-> (layout or None, reason)
+
+    Direct accesses decide. Weak ones (carried back through a copy, or made
+    through a pointer that may point at several symbols) only fill bytes
+    nothing else covers, and are dropped where they disagree."""
     real = [a for a in accesses if not a[3].endswith("[copy]")]
     if not real:
         return None, "only struct-copy accesses (word copies say nothing about fields)"
-    accesses = real
+    strong = [a for a in real if not is_weak(a[3])]
+    # Accesses carried back through copies can come from copy loops the
+    # copy detection missed; they only count when nothing direct is known.
+    weak = [a for a in real if is_weak(a[3]) and (not strong or "(via copy)" not in a[3])]
+    if strong:
+        fields, reason = layout_strict(size, strong)
+        if fields is None or not weak:
+            return fields, reason
+        # Add weak fields on bytes the strong ones left as single bytes.
+        width = []
+        for f in (fields or [1] * size):
+            width += [f] * f
+        for o, w, s, _ in weak:
+            offs = [o] if s is None else (range(o % s, size - w + 1, s) if isinstance(s, int) else [])
+            for k in offs:
+                if 0 <= k and k + w <= size and k % w == 0 and all(width[j] == 1 for j in range(k, k + w)):
+                    for j in range(k, k + w):
+                        width[j] = w
+        out, k = [], 0
+        while k < size:
+            out.append(width[k])
+            k += width[k]
+        return (out if any(x > 1 for x in out) else ""), reason
+    return layout_strict(size, weak)
+
+
+def layout_strict(size, accesses):
+    width = [0] * size
     exact = [(o, w) for o, w, s, _ in accesses if s is None]
     strided = [(o, w, s) for o, w, s, _ in accesses if isinstance(s, int)]
     unknown = [(o, w) for o, w, s, _ in accesses if s == "?"]
@@ -597,10 +783,15 @@ def main():
         data_ptrs.update(t)
 
     an = Analysis(data_ptrs)
-    # Two passes: the first learns which globals hold pointers to data.
-    for _ in range(2):
+    # Several passes: each learns which globals hold pointers and which
+    # functions return pointers, for the next one (getters return pointers
+    # into tables, often through other getters).
+    for _ in range(4):
         gp = an.global_ptrs
+        an.returns = merge_returns(an.new_returns, an.returns)
+        an.new_returns = defaultdict(list)
         an.access.clear(); an.param.clear(); an.calls.clear(); an.forwards.clear()
+        an.aliases = []
         an.global_ptrs = defaultdict(set, {k: set(v) for k, v in gp.items()})
         for name, insns in functions:
             an.run_function(name, insns)
@@ -611,6 +802,10 @@ def main():
             if pp == p:
                 for sym in syms:
                     an.access[sym].append((off + o, w, s if s is not None else stride, f"{where}->{callee}"))
+
+    # Copies: what is read from the copy was read from the source.
+    copied = propagate_copies(an)
+    print(f"{len(an.aliases)} copies traced, {copied} accesses carried back to their source")
 
     arrays = u8_arrays(decomp)
     addrs = symbol_addresses(decomp)

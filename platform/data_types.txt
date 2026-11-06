@@ -15,9 +15,13 @@
 # Entries need evidence: an SDK type, or the access widths the original
 # code uses on the object.
 
-# tvmode, 7 halfwords (fbWidth .. viHeight), xFBmode, field_rendering and
-# aa, sample_pattern[12][2], vfilter[7], padding to 0x3C
-layout GXRenderModeObj = w h7 w b2 b24 b7 b5
+# tvmode (+0), 7 halfwords fbWidth .. viHeight (+4), 2 bytes padding,
+# xFBmode (+20, word-aligned), field_rendering and aa (+24),
+# sample_pattern[12][2] (+26), vfilter[7] (+50), padding to 0x3C.
+# Checked against the data: lbl_803130F0 has 00 00 at +18 and
+# xFBmode = 00 00 00 01 at +20. (An earlier version of this line put
+# xFBmode at +18; tools/access_widths.py exposed it.)
+layout GXRenderModeObj = w h7 b2 w b2 b24 b7 b3
 
 # The SDK's render mode presets (GXNtsc240Ds ... GXEurgb60Hz480IntAa), 60
 # bytes apart; tvmode, fbWidth 640 and the heights decode as such.
