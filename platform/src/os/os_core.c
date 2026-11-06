@@ -10,6 +10,7 @@
 #include <malloc.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- arena ---------------------------------------------------------------
@@ -49,45 +50,7 @@ __attribute__((constructor(101))) static void os_arena_init(void)
     __port_log("arena %p-%p", __OSArenaLo, __OSArenaHi);
 }
 
-/* ---- interrupts ------------------------------------------------------------
- * Game and SDK code brackets critical sections with OSDisableInterrupts /
- * OSRestoreInterrupts. There are no GameCube interrupts here; callbacks that
- * used to run from interrupts are driven by the platform layer. For now the
- * port runs the game on one thread, so a flag is enough. When threads come,
- * this becomes a recursive lock. */
-
-static int interrupts_enabled = 1;
-
-int __port_interrupts_enabled(void) { return interrupts_enabled; }
-
-int OSDisableInterrupts(void)
-{
-    int old = interrupts_enabled;
-    interrupts_enabled = 0;
-    return old;
-}
-
-/* Work that arrived while interrupts were off is delivered when they come
- * back on, as a pending GameCube interrupt would fire then. */
-extern void __port_dvd_pump(void);
-
-int OSEnableInterrupts(void)
-{
-    int old = interrupts_enabled;
-    interrupts_enabled = 1;
-    if (!old)
-        __port_dvd_pump();
-    return old;
-}
-
-int OSRestoreInterrupts(int level)
-{
-    int old = interrupts_enabled;
-    interrupts_enabled = level;
-    if (level && !old)
-        __port_dvd_pump();
-    return old;
-}
+/* Interrupts are in os_irq.c, threads in os_thread.c. */
 
 /* ---- time ------------------------------------------------------------------
  * GameCube time is counted at the timer clock, bus clock / 4 = 40.5 MHz, from
@@ -198,3 +161,14 @@ unsigned long OSGetProgressiveMode(void) { return progressive_mode; }
 void OSSetProgressiveMode(unsigned long on) { progressive_mode = on; }
 unsigned long OSGetSoundMode(void) { return sound_mode; }
 void OSSetSoundMode(unsigned long mode) { sound_mode = mode; }
+
+/* ---- reset and exceptions -------------------------------------------------
+ * The reset button and hot reset have no 3DS meaning. A reset request ends
+ * the program; the HOME menu is how a 3DS app is left. */
+
+void OSRegisterResetFunction(void* info) { (void)info; }
+unsigned long OSGetResetCode(void) { return 0; }
+unsigned long OSGetResetButtonState(void) { return 0; }
+void OSResetSystem(int reset, unsigned long code, int force) { (void)reset; (void)code; (void)force; exit(0); }
+void __OSDoHotReset(unsigned long code) { (void)code; exit(0); }
+void* __OSSetExceptionHandler(unsigned char exception, void* handler) { (void)exception; (void)handler; return 0; }

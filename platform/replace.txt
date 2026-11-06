@@ -1,0 +1,13 @@
+# Game functions the port replaces with its own C version.
+#
+# tools/unify_prototypes.py drops the decomp's definition of every function
+# listed here from whatever unit defines it; the replacement lives in
+# platform/src/game_patch/. Use this only where the decomp's code cannot
+# work on ARM as written, and say why next to the replacement.
+
+# menuShop_exact_80029FAC.c: build MWCC's PowerPC va_list by hand
+# (game_patch/menu_shop_varargs.c).
+fn_80029FAC
+fn_8002A0B8
+fn_8002A1C4
+fn_8002A2CC

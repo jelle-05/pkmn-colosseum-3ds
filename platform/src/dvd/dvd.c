@@ -7,12 +7,10 @@
  * startAddr is the file's offset in the image, and DVDRead reads from there.
  *
  * Asynchronous requests: the data is read at once, but completion (the
- * command block's state and the callback) is delivered later, by
- * __port_dvd_pump(), the way the GameCube delivered it from the DVD
- * interrupt. Game code sets up its own state after starting a request, so
- * calling back before the request function returns would break it. The pump
- * runs when the game polls DVD status, and from the platform's frame and
- * thread code. It only delivers while "interrupts" are enabled.
+ * command block's state and the callback) arrives later as an interrupt,
+ * the way the GameCube delivered it. Game code sets up its own state after
+ * starting a request, so calling back before the request function returns
+ * would break it.
  */
 #include <3ds.h>
 #include <stdio.h>
@@ -58,7 +56,6 @@ enum {
 };
 enum { DVD_COMMAND_READ = 1, DVD_COMMAND_SEEK = 2 };
 
-extern int __port_interrupts_enabled(void);
 
 /* ---- the image and its FST ---------------------------------------------- */
 
@@ -211,43 +208,34 @@ long DVDRead(DVDFileInfo* fi, void* addr, long length, long offset, long prio)
     return length;
 }
 
-/* ---- asynchronous requests ---------------------------------------------- */
+/* ---- asynchronous requests ----------------------------------------------
+ * The read happens at once; the completion is a DVD "interrupt" delivered by
+ * the interrupt thread (os_irq.c) a millisecond later, with interrupts
+ * disabled, as on the GameCube. */
 
-#define MAX_PENDING 64
-static DVDCommandBlock* pending[MAX_PENDING];
-static long pending_result[MAX_PENDING];
-static int npending;
+extern long long OSGetTime(void);
+extern void __port_irq_post(long long when, void (*fn)(void*, long), void* arg, long value);
+
+#define DVD_LATENCY_TICKS (40500000ll / 1000)    /* 1 ms */
+
+static int busy;
+
+static void complete(void* arg, long result)
+{
+    DVDCommandBlock* cb = arg;
+    busy--;
+    cb->state = result < 0 ? DVD_STATE_FATAL_ERROR : DVD_STATE_END;
+    cb->transferredSize = result < 0 ? 0 : (unsigned long)result;
+    if (cb->callback)
+        cb->callback(result, cb);
+}
 
 static void queue(DVDCommandBlock* cb, long result)
 {
-    if (npending == MAX_PENDING)
-        fatal("too many pending requests");
     cb->state = DVD_STATE_BUSY;
-    pending[npending] = cb;
-    pending_result[npending] = result;
-    npending++;
+    busy++;
+    __port_irq_post(OSGetTime() + DVD_LATENCY_TICKS, complete, cb, result);
 }
-
-void __port_dvd_pump(void)
-{
-    static int pumping;
-    if (pumping || !__port_interrupts_enabled())
-        return;
-    pumping = 1;
-    while (npending > 0) {
-        DVDCommandBlock* cb = pending[0];
-        long result = pending_result[0];
-        memmove(pending, pending + 1, (size_t)(npending - 1) * sizeof(pending[0]));
-        memmove(pending_result, pending_result + 1, (size_t)(npending - 1) * sizeof(pending_result[0]));
-        npending--;
-        cb->state = result < 0 ? DVD_STATE_FATAL_ERROR : DVD_STATE_END;
-        cb->transferredSize = result < 0 ? 0 : (unsigned long)result;
-        if (cb->callback)
-            cb->callback(result, cb);
-    }
-    pumping = 0;
-}
-
 int DVDReadAsyncPrio(DVDFileInfo* fi, void* addr, long length, long offset, DVDCBCallback cb, long prio)
 {
     fi->cb.command = DVD_COMMAND_READ;
@@ -279,16 +267,11 @@ int DVDSeekAsyncPrio(DVDFileInfo* fi, long offset, DVDCBCallback cb, long prio)
 
 long DVDSeek(DVDFileInfo* fi, long offset) { (void)fi; (void)offset; return 0; }
 
-long DVDGetCommandBlockStatus(DVDCommandBlock* cb)
-{
-    __port_dvd_pump();
-    return cb->state;
-}
+long DVDGetCommandBlockStatus(DVDCommandBlock* cb) { return cb->state; }
 
 long DVDGetDriveStatus(void)
 {
-    __port_dvd_pump();
-    return npending ? DVD_STATE_BUSY : DVD_STATE_END;
+    return busy ? DVD_STATE_BUSY : DVD_STATE_END;
 }
 
 void* DVDGetCurrentDiskID(void) { return __gc_lowmem; }

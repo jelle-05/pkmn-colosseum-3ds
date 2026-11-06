@@ -31,16 +31,40 @@ def main():
     ap.add_argument("--seconds", type=float, default=15)
     ap.add_argument("--azahar", default=r"C:\Program Files\Azahar\azahar.exe")
     ap.add_argument("--rom", type=Path, default=ROOT / "build" / "link_probe" / "colosseum.3dsx")
+    ap.add_argument("--gdb", action="store_true",
+                    help="enable Azahar's gdbstub, stop at the first heartbeat "
+                         "(__port_thread_dump) and print every thread's backtrace")
     args = ap.parse_args()
 
     STUB_LOG.unlink(missing_ok=True)
     started = time.time()
+    config = APPDATA / "Azahar" / "config" / "qt-config.ini"
+    saved = config.read_text(encoding="utf-8") if args.gdb else None
+    if args.gdb:
+        config.write_text(saved.replace("use_gdbstub=false", "use_gdbstub=true")
+                          .replace("use_gdbstub\\default=true", "use_gdbstub\\default=false"), encoding="utf-8")
     proc = subprocess.Popen([args.azahar, str(args.rom.resolve())])
     try:
-        time.sleep(args.seconds)
+        if args.gdb:
+            time.sleep(3)
+            elf = args.rom.with_suffix(".elf").resolve().as_posix()
+            gdb = Path(os.environ.get("DEVKITARM_WIN", r"C:\devkitPro\devkitARM")) / "bin" / "arm-none-eabi-gdb.exe"
+            cmds = ["set pagination off", "set confirm off", f"file {elf}",
+                    "target remote localhost:24689", "break __port_thread_dump", "continue",
+                    "info threads", "thread apply all bt 12", "detach"]
+            p = subprocess.run([str(gdb), "-batch", *sum((["-ex", c] for c in cmds), [])],
+                               capture_output=True, text=True, timeout=args.seconds + 60)
+            out = ROOT / "build" / "gdb.txt"
+            out.write_text(p.stdout + p.stderr, encoding="utf-8")
+            print(p.stdout[-6000:])
+            print(p.stderr[-1500:])
+        else:
+            time.sleep(args.seconds)
     finally:
         proc.kill()
         proc.wait()
+        if saved is not None:
+            config.write_text(saved, encoding="utf-8")
 
     if not AZ_LOG.exists() or AZ_LOG.stat().st_mtime < started:
         print("Azahar did not write a new log")

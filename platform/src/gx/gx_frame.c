@@ -170,7 +170,16 @@ void __port_gx_deliver(void)
     }
 }
 
-void GXWaitDrawDone(void) { __port_gx_deliver(); }
+/* The draw-done callback runs in interrupt context on the GameCube. */
+extern int OSDisableInterrupts(void);
+extern int OSRestoreInterrupts(int level);
+
+void GXWaitDrawDone(void)
+{
+    int level = OSDisableInterrupts();
+    __port_gx_deliver();
+    OSRestoreInterrupts(level);
+}
 
 void GXDrawDone(void)
 {
@@ -180,3 +189,8 @@ void GXDrawDone(void)
 
 void GXFlush(void) {}
 void GXPixModeSync(void) {}
+
+/* GXSetGPMetric (unnamed in the decomp, src/dolphin/sdk_r52_800BD7A0_prefix.c):
+ * selects the GPU performance counters. The game's gapp profiler sets them;
+ * there are no such counters here. */
+void fn_800BD91C(int perf0, int perf1) { (void)perf0; (void)perf1; }
