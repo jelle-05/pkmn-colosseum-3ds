@@ -1,0 +1,23 @@
+# Build output
+build/
+*.3dsx
+*.smdh
+*.elf
+*.map
+*.cia
+
+# Game data. Never commit anything taken from a disc.
+*.iso
+*.gcm
+*.rvz
+*.ciso
+*.fsys
+*.thp
+*.samp
+data/
+extracted/
+
+# Local files
+local/
+*.log
+__pycache__/
