@@ -82,12 +82,9 @@ def object_sections(obj):
     return obj, res
 
 
-def main():
-    rsp, out_ld, out_specs = (Path(a) for a in sys.argv[1:4])
-    manifest = json.loads((ROOT / "build" / "objects.json").read_text(encoding="utf-8"))
-    decomp = Path(manifest["decomp"])
-    objs = [Path(l) for l in rsp.read_text(encoding="utf-8").split() if l]
-
+def blocks(objs, decomp):
+    """-> (data blocks, zero-initialised blocks, placed, problems): output
+    section statements that put each data symbol at its retail offset."""
     with ThreadPoolExecutor() as pool:
         tables = list(pool.map(object_sections, objs))
     provider = {}
@@ -135,8 +132,20 @@ def main():
         if not lines:
             continue
         label = f".gc_{module}{section.replace('.', '_')}"
-        block = f"\t{label} ALIGN(0x20) : {{\n" + "\n".join(lines) + "\n\t} : data\n"
+        block = f"\t{label} ALIGN(0x20) : {{\n" + "\n".join(lines) + "\n\t}"
         (bss_blocks if zero else data_blocks).append(block)
+    problems.append(f"({len(dup)} names defined twice, left to the default placement)")
+    return data_blocks, bss_blocks, placed, skipped, problems
+
+
+def main():
+    rsp, out_ld, out_specs = (Path(a) for a in sys.argv[1:4])
+    manifest = json.loads((ROOT / "build" / "objects.json").read_text(encoding="utf-8"))
+    decomp = Path(manifest["decomp"])
+    objs = [Path(l) for l in rsp.read_text(encoding="utf-8").split() if l]
+    data_blocks, bss_blocks, placed, skipped, problems = blocks(objs, decomp)
+    data_blocks = [b + " : data\n" for b in data_blocks]
+    bss_blocks = [b + " : data\n" for b in bss_blocks]
 
     base = BASE_LD.read_text(encoding="utf-8")
     k = base.index("=========== DATA section")
@@ -156,7 +165,7 @@ def main():
         "*startfile:\n3dsx_crt0%O%s crti%O%s crtbegin%O%s\n", encoding="utf-8")
     (out_ld.parent / "layout_problems.txt").write_text("\n".join(problems) + "\n", encoding="utf-8")
     print(f"layout: {placed} data symbols at their GameCube offsets, {skipped} left to the default "
-          f"placement ({len(dup)} names defined twice skipped); see {out_ld.parent / 'layout_problems.txt'}")
+          f"placement; see {out_ld.parent / 'layout_problems.txt'}")
 
 
 if __name__ == "__main__":

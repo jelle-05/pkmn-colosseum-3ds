@@ -22,10 +22,12 @@ Status
   for the 617 symbols that are still missing. In Azahar it starts and runs
   until the first SDK call. See [docs/COMPILE_SURVEY.md](docs/COMPILE_SURVEY.md)
   and [docs/LINK_PROBE.md](docs/LINK_PROBE.md).
-- Phase 2 (platform layer): started. OS, ARAM, DVD, input and a first GX/VI
-  layer are in. The boot runs through main(), the game's init and HSD's
-  component setup, presents its first frame, and stops where the OS thread
-  system starts.
+- Phase 2 (platform layer): in progress. OS with threads, interrupts and
+  alarms, ARAM, DVD, REL modules, input and a first GX/VI layer are in. The
+  game runs in the ARM11's big-endian data mode, so its data and the files
+  on the disc are used as they are (see [docs/BIG_ENDIAN.md](docs/BIG_ENDIAN.md)).
+  The boot loads the archive index, links its first modules and stops at
+  the audio DSP. Nothing is drawn yet.
   See [docs/BOOT_PROGRESS.md](docs/BOOT_PROGRESS.md). The full work list is
   [docs/PLATFORM_TODO.txt](docs/PLATFORM_TODO.txt).
 
@@ -60,10 +62,11 @@ The output goes to `build/objects.json`. Then, to compile everything for the
     python tools/compile_check.py
     python tools/unify_prototypes.py --compile
 
-To link it into build/link_probe/colosseum.3dsx:
+To link it into build/port/colosseum.3dsx and try it in Azahar:
 
     python tools/link_check.py
-    python tools/link_probe.py
+    python tools/link_be.py
+    python tools/run_azahar.py
 
 
 Requirements
@@ -80,12 +83,11 @@ Layout
 
     decomp/      the decompilation (submodule, do not edit here)
     tools/       build helpers
-    platform/    SDK replacement: OS, DVD, GX, PAD, CARD, audio (header
-                 overrides so far)
+    platform/    SDK replacement: OS, DVD, GX, VI, PAD, REL modules (src/,
+                 big-endian) and the libctru/citro3d side (host/,
+                 little-endian)
     compat/      MWCC compatibility header, force-included in every unit
     docs/        notes and measurements
-    swap/        endian swappers for game file formats (planned)
-    patches/     small, documented changes to decomp sources (planned)
 
 
 Notes

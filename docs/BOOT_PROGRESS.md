@@ -1,4 +1,4 @@
-Boot progress
+﻿Boot progress
 =============
 
 How far the probe build gets in Azahar, step by step. Each step lists the
@@ -66,6 +66,25 @@ instead, found with the heartbeat in the port log and `run_azahar.py --gdb`
 
 The second thread (prio 16) is running at that point.
 
+Then the port moved to the ARM11's big-endian data mode (docs/BIG_ENDIAN.md),
+so file data is read as it is, and so is everything above that needed
+converting:
+
+    where it stopped           added to get past it
+    -------------------------  -----------------------------------------------
+    OSLink                     big-endian image in a little-endian host
+                               (tools/link_be.py); the archive table of
+                               contents now reads right, the loader thread
+                               finishes
+    (stalls, 3 s per frame)    os/os_link.c: OSLink finds the compiled-in
+                               module by its REL ID and sets its prolog;
+                               common_rel and mail link. The interrupt lock
+                               holder is raised while others wait for it (the
+                               idle function held it at the lowest priority
+                               while the main thread spun in OSYieldThread);
+                               OSYieldThread lets go of it
+    DSPInit                    the audio DSP, for MusyX: next
+
 The heap failure on the way showed the data problem predicted in the
 roadmap: the decomp stores many objects as big-endian u8 arrays (about
 500 KB in 974 arrays). A 640-pixel-wide render mode read 0x8002 as its
@@ -83,8 +102,10 @@ The DVD layer reads the user's own disc image from
 `sdmc:/3ds/colosseum/GC6E01.iso`. For Azahar that is
 `%APPDATA%\Azahar\sdmc\3ds\colosseum\GC6E01.iso`. Then:
 
-    python tools/link_probe.py
-    python tools/run_azahar.py           # or --gdb for backtraces
+    python tools/unify_prototypes.py --compile
+    python tools/link_check.py
+    python tools/link_be.py
+    python tools/run_azahar.py           # or --gdb for threads and stacks
 
 
 Platform pieces so far

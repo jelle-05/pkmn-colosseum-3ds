@@ -1160,8 +1160,11 @@ def main():
         pre = rewrite_ppc_varargs(strip_asm_functions(strip_extern_c(text), u, stats), u, stats)
         new = rewrite_unit(u, pre, defs, stats)
         new = redirect_fixed_addresses(new, stats)
-        new = reverse_bitfields(new, stats)
-        new = retype_data(new, data_types, stats)
+        if not compile_check.BIG_ENDIAN:
+            # Little-endian build only: in big-endian mode data and
+            # bitfields already have the GameCube layout.
+            new = reverse_bitfields(new, stats)
+            new = retype_data(new, data_types, stats)
         if u["module"] != "main":
             # Every REL defines its own _prolog/_epilog/_unresolved. Linked
             # statically they need distinct names; the platform's OSLink

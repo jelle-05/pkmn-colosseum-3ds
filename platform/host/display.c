@@ -1,5 +1,5 @@
 /*
- * display.c - citro3d setup, frames and vblank.
+ * display.c - citro3d setup, frames and vblank (host side).
  *
  * One render target for the top screen, 400x240. The GameCube's 640x480
  * EFB is mapped onto it by the renderer (to come), through the viewport.
@@ -8,7 +8,7 @@
 #include <citro3d.h>
 #include <stdio.h>
 
-#include "display.h"
+#include "port/host.h"
 
 #define DISPLAY_TRANSFER_FLAGS                                                              \
     (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |        \
@@ -20,7 +20,7 @@ static int initialised;
 static int frame_open;
 static unsigned long frames;
 
-void display_init(void)
+void host_display_init(void)
 {
     if (initialised)
         return;
@@ -31,26 +31,23 @@ void display_init(void)
     initialised = 1;
 }
 
-int display_frame_open(void) { return frame_open; }
-
-void display_begin_frame(int clear, unsigned char r, unsigned char g, unsigned char b, unsigned char a,
-                         unsigned long z)
+/* rgba is 0xRRGGBBAA as citro3d takes it; z the GameCube's 24-bit depth. */
+void host_frame_begin(int clear, host_u32 rgba, host_u32 z)
 {
-    display_init();
+    host_display_init();
+    if (frame_open)
+        return;
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
-    if (clear) {
-        /* citro3d takes 0xRRGGBBAA; depth is the GameCube's 24-bit value. */
-        u32 color = (u32)r << 24 | (u32)g << 16 | (u32)b << 8 | a;
-        C3D_RenderTargetClear(top, C3D_CLEAR_ALL, color, (u32)(z & 0xFFFFFF));
-    }
+    if (clear)
+        C3D_RenderTargetClear(top, C3D_CLEAR_ALL, rgba, z & 0xFFFFFF);
     C3D_FrameDrawOn(top);
     frame_open = 1;
 }
 
-void display_end_frame(void)
+host_u32 host_frame_end(void)
 {
     if (!frame_open)
-        return;
+        return frames;
     C3D_FrameEnd(0);
     frame_open = 0;
     frames++;
@@ -63,14 +60,7 @@ void display_end_frame(void)
             fclose(f);
         }
     }
+    return frames;
 }
 
-int display_wait_vblank(void)
-{
-    if (!aptMainLoop())
-        return 0;
-    gspWaitForVBlank();
-    return 1;
-}
-
-unsigned long display_frame_count(void) { return frames; }
+void host_wait_vblank(void) { gspWaitForVBlank(); }

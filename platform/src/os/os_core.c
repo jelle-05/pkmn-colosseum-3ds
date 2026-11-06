@@ -1,4 +1,4 @@
-/*
+﻿/*
  * os_core.c - the hardware-bound core of the Dolphin OS library.
  *
  * Portable SDK code (arena, heap allocator) is compiled from the decomp, see
@@ -6,12 +6,11 @@
  * in OSInit before main(): the arena itself, interrupts, time, caches,
  * memory protection and debug output.
  */
-#include <3ds.h>
-#include <malloc.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+
+#include "port/host.h"
 
 /* ---- arena ---------------------------------------------------------------
  * On the GameCube, OSInit sets the arena to the free RAM between the end of
@@ -33,18 +32,21 @@ void __port_log(const char* fmt, ...)
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    FILE* f = fopen("sdmc:/colosseum-port.log", "a");
-    if (f) {
-        fprintf(f, "%s\n", buf);
-        fclose(f);
+    size_t n = strlen(buf);
+    if (n < sizeof(buf) - 1)
+        buf[n++] = '\n';
+    int fd = host_file_open("sdmc:/colosseum-port.log", "a");
+    if (fd >= 0) {
+        host_file_write(fd, buf, n);
+        host_file_close(fd);
     }
 }
 
 __attribute__((constructor(101))) static void os_arena_init(void)
 {
-    void* arena = memalign(32, GC_ARENA_SIZE);
+    void* arena = host_memalign(32, GC_ARENA_SIZE);
     if (!arena)
-        svcBreak(USERBREAK_PANIC);
+        host_break(0);
     __OSArenaLo = arena;
     __OSArenaHi = (char*)arena + GC_ARENA_SIZE;
     __port_log("arena %p-%p", __OSArenaLo, __OSArenaHi);
@@ -61,27 +63,11 @@ __attribute__((constructor(101))) static void os_arena_init(void)
  * the 3DS system tick the progress. OSGetTick is the low 32 bits of the same
  * counter, as on the GameCube. */
 
-#define GC_TIMER_HZ 40500000ull
-#define MS_1900_TO_2000 3155673600000ull   /* osGetTime() counts from 1900 */
-
-static unsigned long long time_base;     /* GameCube ticks at system tick 0 */
-
-static unsigned long long to_gc_ticks(unsigned long long sys)
-{
-    return (sys / SYSCLOCK_ARM11) * GC_TIMER_HZ + (sys % SYSCLOCK_ARM11) * GC_TIMER_HZ / SYSCLOCK_ARM11;
-}
-
-__attribute__((constructor(101))) static void os_time_init(void)
-{
-    unsigned long long ms = osGetTime();
-    unsigned long long since_2000 = ms > MS_1900_TO_2000 ? ms - MS_1900_TO_2000 : 0;
-    unsigned long long now = (since_2000 / 1000) * GC_TIMER_HZ + (since_2000 % 1000) * (GC_TIMER_HZ / 1000);
-    time_base = now - to_gc_ticks(svcGetSystemTick());
-}
-
 long long OSGetTime(void)
 {
-    return (long long)(time_base + to_gc_ticks(svcGetSystemTick()));
+    unsigned int t[2];
+    host_gc_time(t);
+    return (long long)((unsigned long long)t[0] << 32 | t[1]);
 }
 
 unsigned long OSGetTick(void)
@@ -148,7 +134,7 @@ void OSReport(const char* fmt, ...)
     if (n > (int)sizeof(buf) - 1)
         n = sizeof(buf) - 1;
     if (n > 0)
-        svcOutputDebugString(buf, n);
+        host_debug_string(buf, (unsigned)n);
 }
 
 int DBIsDebuggerPresent(void) { return 0; }
@@ -169,6 +155,6 @@ void OSSetSoundMode(unsigned long mode) { sound_mode = mode; }
 void OSRegisterResetFunction(void* info) { (void)info; }
 unsigned long OSGetResetCode(void) { return 0; }
 unsigned long OSGetResetButtonState(void) { return 0; }
-void OSResetSystem(int reset, unsigned long code, int force) { (void)reset; (void)code; (void)force; exit(0); }
-void __OSDoHotReset(unsigned long code) { (void)code; exit(0); }
+void OSResetSystem(int reset, unsigned long code, int force) { (void)reset; (void)code; (void)force; host_exit(0); }
+void __OSDoHotReset(unsigned long code) { (void)code; host_exit(0); }
 void* __OSSetExceptionHandler(unsigned char exception, void* handler) { (void)exception; (void)handler; return 0; }

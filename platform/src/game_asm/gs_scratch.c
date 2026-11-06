@@ -1,4 +1,4 @@
-/*
+﻿/*
  * gs_scratch.c - C version of GSscratchInit (0x800EEDF8).
  *
  * The decomp keeps GSscratchInit as the developers' own assembly
@@ -24,7 +24,6 @@
  * The locked cache (16 KB at 0xE0000000 on the GameCube) is a plain buffer,
  * see platform/src/os/lc.c.
  */
-#include <3ds.h>
 #include <stdio.h>
 
 extern unsigned char lbl_804018F0[];
@@ -60,8 +59,9 @@ int GSscratchInit(unsigned char reservedBlocks)
         /* Here the original moves the caller's stack into the locked cache. */
         char line[64];
         int len = snprintf(line, sizeof(line), "port: GSscratchInit(%u) needs a stack move", reservedBlocks);
-        svcOutputDebugString(line, len);
-        svcBreak(USERBREAK_PANIC);
+        (void)len;
+        extern void __port_fatal(const char*);
+        __port_fatal(line);
     }
 
     lbl_8047ABE8 = 0;

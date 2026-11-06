@@ -1,4 +1,4 @@
-/*
+﻿/*
  * vi.c - the video interface (VI).
  *
  * On the GameCube, VI scans an XFB out to the TV and raises an interrupt at
@@ -12,12 +12,10 @@
  * interrupts disabled. The 3DS presents what GXCopyDisp closed, so the
  * framebuffer the game hands to VISetNextFrameBuffer is only remembered.
  */
-#include <3ds.h>
-#include <stdlib.h>
+#include "port/host.h"
 
 #include "port/gx_types.h"
 #include "../os/os_thread.h"
-#include "display.h"
 
 typedef void (*VIRetraceCallback)(gx_u32 retrace_count);
 
@@ -54,7 +52,7 @@ static void vblank_thread(void* unused)
     (void)unused;
     unsigned beats = 0;
     for (;;) {
-        gspWaitForVBlank();
+        host_wait_vblank();
         __port_irq_post(OSGetTime(), retrace, 0, 0);
         /* Heartbeat: the first 20 seconds, every 2 seconds. */
         if (++beats % 120 == 0 && beats <= 1200) {
@@ -67,11 +65,11 @@ static void vblank_thread(void* unused)
 
 void VIInit(void)
 {
-    display_init();
+    host_display_init();
     if (!vblank_running) {
         OSInitThreadQueue(&retrace_queue);
-        if (!threadCreate(vblank_thread, 0, 8 * 1024, PRIO_IRQ, -2, true))
-            svcBreak(USERBREAK_PANIC);
+        if (!host_thread_create(vblank_thread, 0, 8 * 1024, PRIO_IRQ | 1 << 8))
+            host_break(0);
         vblank_running = 1;
     }
 }
@@ -124,8 +122,8 @@ void VIWaitForRetrace(void)
     static int main_checked;
     if (!main_checked || __port_self()->thread == 0) {
         main_checked = 1;
-        if (__port_self()->thread == 0 && !aptMainLoop())
-            exit(0);
+        if (__port_self()->thread == 0 && !host_main_loop())
+            host_exit(0);
     }
     int level = OSDisableInterrupts();
     gx_u32 count = retrace_count;

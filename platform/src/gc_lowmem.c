@@ -1,11 +1,10 @@
-/*
+﻿/*
  * gc_lowmem.c - stand-in for the first 16 KB of GameCube RAM.
  *
  * See platform/include/port/gc_mem.h. The OS globals are filled in with the
  * values a retail GameCube's boot ROM leaves there for this game, in native
  * byte order, because game code reads them as plain u32s.
  */
-#include <3ds.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -36,13 +35,10 @@ void __port_bad_address(unsigned long addr)
 {
     char line[64];
     int n = snprintf(line, sizeof(line), "port: fixed GameCube address 0x%08lX", addr);
-    svcOutputDebugString(line, n);
-    FILE* f = fopen("sdmc:/colosseum-port-stub.log", "a");
-    if (f) {
-        fprintf(f, "bad address 0x%08lX\n", addr);
-        fclose(f);
-    }
-    svcBreak(USERBREAK_PANIC);
+    (void)n;
+    extern void __port_fatal(const char*);
+    snprintf(line, sizeof(line), "bad address 0x%08lX", addr);
+    __port_fatal(line);
     for (;;) {
     }
 }

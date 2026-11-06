@@ -1,4 +1,4 @@
-/*
+﻿/*
  * dvd.c - the Dolphin DVD library on top of the game's own disc image.
  *
  * The user's GC6E01 ISO lives on the SD card. DVDInit reads its header and
@@ -12,7 +12,7 @@
  * starting a request, so calling back before the request function returns
  * would break it.
  */
-#include <3ds.h>
+#include "port/host.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +65,7 @@ typedef struct {
     unsigned long length_or_next;
 } FSTEntry;
 
-static FILE* iso;
+static int iso = -1;              /* host file */
 static FSTEntry* fst;
 static unsigned long fst_count;
 static const char* fst_names;
@@ -79,31 +79,23 @@ static unsigned long be32(const unsigned char* p)
 static void fatal(const char* what)
 {
     char line[128];
-    int n = snprintf(line, sizeof(line), "port: DVD: %s", what);
-    svcOutputDebugString(line, n);
-    FILE* f = fopen("sdmc:/colosseum-port-stub.log", "a");
-    if (f) {
-        fprintf(f, "DVD: %s\n", what);
-        fclose(f);
-    }
-    svcBreak(USERBREAK_PANIC);
+    extern void __port_fatal(const char*);
+    snprintf(line, sizeof(line), "DVD: %s", what);
+    __port_fatal(line);
 }
 
 static int read_image(void* dst, unsigned long offset, unsigned long len)
 {
-    if (fseek(iso, (long)offset, SEEK_SET) != 0)
-        return 0;
-    return fread(dst, 1, len, iso) == len;
+    return host_file_read(iso, dst, len, offset) == len;
 }
 
 void DVDInit(void)
 {
-    if (iso)
+    if (iso >= 0)
         return;
-    iso = fopen(ISO_PATH, "rb");
-    if (!iso)
+    iso = host_file_open(ISO_PATH, "rb");
+    if (iso < 0)
         fatal("cannot open " ISO_PATH);
-    setvbuf(iso, NULL, _IOFBF, 64 * 1024);
 
     unsigned char header[0x440];
     if (!read_image(header, 0, sizeof(header)))
@@ -115,11 +107,11 @@ void DVDInit(void)
     memcpy(__gc_lowmem, header, 0x20);
 
     unsigned long fst_off = be32(header + 0x424), fst_size = be32(header + 0x428);
-    unsigned char* raw = malloc(fst_size);
+    unsigned char* raw = host_malloc(fst_size);
     if (!raw || !read_image(raw, fst_off, fst_size))
         fatal("cannot read the FST");
     fst_count = be32(raw + 8);
-    fst = malloc(fst_count * sizeof(FSTEntry));
+    fst = host_malloc(fst_count * sizeof(FSTEntry));
     if (!fst)
         fatal("out of memory");
     for (unsigned long i = 0; i < fst_count; i++) {

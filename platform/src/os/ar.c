@@ -1,4 +1,4 @@
-/*
+﻿/*
  * ar.c - ARAM (the GameCube's 16 MB audio RAM) and its DMA queue.
  *
  * On the GameCube, ARAM is separate memory reached only through DMA. Here it
@@ -10,8 +10,7 @@
  * returns. That is the first thing to revisit if callers turn out to rely on
  * the callback running later.
  */
-#include <3ds.h>
-#include <malloc.h>
+#include "port/host.h"
 #include <string.h>
 
 #define ARAM_SIZE 0x01000000u
@@ -25,7 +24,7 @@ static ARCallback dma_callback;
 static void* aram_ptr(unsigned long addr, unsigned long len)
 {
     if (addr >= ARAM_SIZE || len > ARAM_SIZE - addr)
-        svcBreak(USERBREAK_PANIC);
+        host_break(0);
     return aram + addr;
 }
 
@@ -33,9 +32,9 @@ unsigned long ARInit(unsigned long* stack, unsigned long entries)
 {
     (void)stack; (void)entries;
     if (!aram) {
-        aram = memalign(32, ARAM_SIZE);
+        aram = host_memalign(32, ARAM_SIZE);
         if (!aram)
-            svcBreak(USERBREAK_PANIC);
+            host_break(0);
         memset(aram, 0, ARAM_SIZE);
     }
     return ARAM_BASE;

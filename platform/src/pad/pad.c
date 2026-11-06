@@ -1,4 +1,4 @@
-/*
+﻿/*
  * pad.c - GameCube controller input from the 3DS buttons.
  *
  * Port 1 is the 3DS; ports 2-4 report no controller. Mapping:
@@ -16,8 +16,10 @@
  * callback; here the platform samples once per frame from VIWaitForRetrace
  * (__port_pad_sample).
  */
-#include <3ds.h>
 #include <string.h>
+
+#include "port/host.h"
+#include "port/types.h"
 
 typedef struct {
     u16 button;
@@ -53,26 +55,25 @@ static s8 scale_stick(int v)
 
 void __port_pad_sample(void)
 {
-    hidScanInput();
-    u32 held = hidKeysHeld();
-    circlePosition cp, cs;
-    hidCircleRead(&cp);
-    irrstCstickRead(&cs);
+    u32 held = host_input_scan();
+    u32 circle = host_input_circle(), cstick = host_input_cstick();
+    struct { s16 dx, dy; } cp = { (s16)(circle & 0xFFFF), (s16)(circle >> 16) },
+                           cs = { (s16)(cstick & 0xFFFF), (s16)(cstick >> 16) };
 
     PADStatus s;
     memset(&s, 0, sizeof(s));
-    if (held & KEY_DLEFT) s.button |= PAD_BUTTON_LEFT;
-    if (held & KEY_DRIGHT) s.button |= PAD_BUTTON_RIGHT;
-    if (held & KEY_DDOWN) s.button |= PAD_BUTTON_DOWN;
-    if (held & KEY_DUP) s.button |= PAD_BUTTON_UP;
-    if (held & (KEY_ZL | KEY_ZR)) s.button |= PAD_TRIGGER_Z;
-    if (held & KEY_R) { s.button |= PAD_TRIGGER_R; s.triggerR = 255; }
-    if (held & KEY_L) { s.button |= PAD_TRIGGER_L; s.triggerL = 255; }
-    if (held & KEY_A) { s.button |= PAD_BUTTON_A; s.analogA = 255; }
-    if (held & KEY_B) { s.button |= PAD_BUTTON_B; s.analogB = 255; }
-    if (held & KEY_X) s.button |= PAD_BUTTON_X;
-    if (held & KEY_Y) s.button |= PAD_BUTTON_Y;
-    if (held & KEY_START) s.button |= PAD_BUTTON_START;
+    if (held & HOST_KEY_DLEFT) s.button |= PAD_BUTTON_LEFT;
+    if (held & HOST_KEY_DRIGHT) s.button |= PAD_BUTTON_RIGHT;
+    if (held & HOST_KEY_DDOWN) s.button |= PAD_BUTTON_DOWN;
+    if (held & HOST_KEY_DUP) s.button |= PAD_BUTTON_UP;
+    if (held & (HOST_KEY_ZL | HOST_KEY_ZR)) s.button |= PAD_TRIGGER_Z;
+    if (held & HOST_KEY_R) { s.button |= PAD_TRIGGER_R; s.triggerR = 255; }
+    if (held & HOST_KEY_L) { s.button |= PAD_TRIGGER_L; s.triggerL = 255; }
+    if (held & HOST_KEY_A) { s.button |= PAD_BUTTON_A; s.analogA = 255; }
+    if (held & HOST_KEY_B) { s.button |= PAD_BUTTON_B; s.analogB = 255; }
+    if (held & HOST_KEY_X) s.button |= PAD_BUTTON_X;
+    if (held & HOST_KEY_Y) s.button |= PAD_BUTTON_Y;
+    if (held & HOST_KEY_START) s.button |= PAD_BUTTON_START;
     s.stickX = scale_stick(cp.dx);
     s.stickY = scale_stick(cp.dy);
     s.substickX = scale_stick(cs.dx);
@@ -86,7 +87,7 @@ void __port_pad_sample(void)
 
 int PADInit(void)
 {
-    irrstInit();
+    host_input_init();
     return 1;
 }
 

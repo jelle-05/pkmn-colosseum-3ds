@@ -1,4 +1,4 @@
-/*
+﻿/*
  * gs_thread.c - the GSthread switch primitives in C, on ARM coroutines.
  *
  * The decomp keeps these as the developers' assembly
@@ -22,9 +22,8 @@
  * recognised by GSthreadCreate's call to threadSaveGPRRegisters, which
  * snapshots the registers into a fresh context block.
  */
-#include <3ds.h>
-#include <malloc.h>
-#include <stdio.h>
+#include "port/host.h"
+#include "port/types.h"
 #include <string.h>
 
 typedef struct {
@@ -129,14 +128,14 @@ static void start(Coroutine* co, GSThreadCtx* ctx, u32 stack_hint)
     size_t size = stack_hint * 2 > MIN_STACK ? stack_hint * 2 : MIN_STACK;
     size = (size + 7) & ~(size_t)7;
     if (co->stack && co->stack_size < size) {
-        free(co->stack);
+        host_free(co->stack);
         co->stack = 0;
     }
     if (!co->stack) {
-        co->stack = memalign(8, size);
+        co->stack = host_memalign(8, size);
         co->stack_size = size;
         if (!co->stack)
-            svcBreak(USERBREAK_PANIC);
+            host_break(0);
     }
     /* Frame popped by the first __port_co_switch: d8-d15 (16 words), then
      * r4-r11 and pc (9 words). r4 carries the record. */
@@ -155,7 +154,7 @@ void threadExecute(void)
     u32 index = (lbl_8047AC00 - (u32)lbl_8047AC28) / GSTHREAD_SIZE;
     if (index >= MAX_COROUTINES || index >= lbl_8047AC30) {
         __port_log("threadExecute: thread index %lu out of range", index);
-        svcBreak(USERBREAK_PANIC);
+        host_break(0);
     }
     Coroutine* co = &cos[index];
     if (take_fresh(ctx) || !co->live) {

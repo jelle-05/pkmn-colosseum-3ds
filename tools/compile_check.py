@@ -33,7 +33,14 @@ ROOT = Path(__file__).resolve().parent.parent
 
 DEVKITARM = Path(os.environ.get("DEVKITARM_WIN", r"C:\devkitPro\devkitARM"))
 
-ARCH = ["-march=armv6k", "-mtune=mpcore", "-mfloat-abi=hard", "-mtp=soft"]
+# The game and the platform layer run in the ARM11's big-endian data mode
+# (BE8: instructions stay little-endian, data accesses are big-endian), so
+# GameCube data, compiled in or read from the disc, is used as it is. Only
+# platform/host, which talks to libctru and citro3d, is little-endian
+# (docs/BIG_ENDIAN.md).
+BIG_ENDIAN = True
+ARCH_LE = ["-march=armv6k", "-mtune=mpcore", "-mfloat-abi=hard", "-mtp=soft"]
+ARCH = ARCH_LE + (["-mbig-endian"] if BIG_ENDIAN else [])
 
 # Language semantics that must match MWCC's C89-era behaviour, for every
 # compile of decomp code:

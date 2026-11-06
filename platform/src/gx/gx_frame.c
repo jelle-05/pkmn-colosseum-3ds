@@ -1,4 +1,4 @@
-/*
+﻿/*
  * gx_frame.c - GX initialisation, EFB copies, primitives and synchronisation.
  *
  * Frame model. On the GameCube the game draws into the embedded framebuffer
@@ -15,25 +15,29 @@
 #include <string.h>
 
 #include "gx_state.h"
-#include "../video/display.h"
+#include "port/host.h"
 
 extern void __gx_state_defaults(void);
 extern unsigned char* __GXFifoPtr;
 
 static int pending_clear = 1;
+static int frame_open;
 
 static void ensure_frame(void)
 {
-    if (!display_frame_open()) {
+    if (!frame_open) {
         GXColor c = __gx.copy_clear_color;
-        display_begin_frame(pending_clear, c.r, c.g, c.b, c.a, __gx.copy_clear_z);
+        /* citro3d takes 0xRRGGBBAA */
+        host_frame_begin(pending_clear, (host_u32)c.r << 24 | (host_u32)c.g << 16 | (host_u32)c.b << 8 | c.a,
+                         __gx.copy_clear_z);
         pending_clear = 0;
+        frame_open = 1;
     }
 }
 
 void* GXInit(void* base, gx_u32 size)
 {
-    display_init();
+    host_display_init();
     __gx_state_defaults();
     __gx.fifo_base = base;
     __gx.fifo_size = size;
@@ -88,7 +92,8 @@ void GXCopyDisp(void* dest, int clear)
 {
     (void)dest;
     ensure_frame();             /* an empty frame still shows the clear */
-    display_end_frame();
+    host_frame_end();
+    frame_open = 0;
     pending_clear = clear;
 }
 

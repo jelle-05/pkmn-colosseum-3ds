@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Link everything into a .3dsx, with stubs for what is still missing.
 
 Takes the missing-symbol list from tools/link_check.py and writes
@@ -12,7 +12,8 @@ The result does not run the game. It proves the build chain works end to
 end, and the generated stubs.c is the platform layer's work list, sorted by
 where each symbol comes from.
 
-Usage:
+Superseded by tools/link_be.py since the port runs big-endian (docs/BIG_ENDIAN.md): objects are now big-endian and this little-endian link no longer fits. link_be.py uses read_symbols() and c_name() from here.
+ (little-endian builds only):
     python tools/link_check.py
     python tools/link_probe.py
 """
