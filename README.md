@@ -17,9 +17,13 @@ Status
 ------
 
 - Phase 0 (matching baseline): done. The decomp builds and matches on Windows.
-- Phase 1 (compile the game code for the host and the 3DS): started. 1,871 of
-  1,898 game and library units compile with devkitARM. Nothing links yet. See
-  [docs/COMPILE_SURVEY.md](docs/COMPILE_SURVEY.md).
+- Phase 1 (compile and link the game code): mostly done. 1,874 of 1,898 game
+  and library units compile with devkitARM and link into a .3dsx, with stubs
+  for the 617 symbols that are still missing. In Azahar it starts and runs
+  until the first SDK call. See [docs/COMPILE_SURVEY.md](docs/COMPILE_SURVEY.md)
+  and [docs/LINK_PROBE.md](docs/LINK_PROBE.md).
+- Phase 2 (platform layer): next. The work list is
+  [docs/PLATFORM_TODO.txt](docs/PLATFORM_TODO.txt).
 
 The target is the New 3DS. The Old 3DS is probably too slow.
 
@@ -47,6 +51,11 @@ The output goes to `build/objects.json`. Then, to compile everything for the
 
     python tools/compile_check.py
     python tools/unify_prototypes.py --compile
+
+To link it into build/link_probe/colosseum.3dsx:
+
+    python tools/link_check.py
+    python tools/link_probe.py
 
 
 Requirements

@@ -1,0 +1,107 @@
+Platform work list
+==================
+
+Symbols the game and library code call that came from the SDK, runtime
+and debugger units the port replaces. Generated from tools/link_check.py
+at decomp commit 1ab993327: 316 symbols.
+
+GX (graphics): 102
+    GXBegin, GXCallDisplayList, GXClearVtxDesc, GXCopyDisp, GXCopyTex
+    GXDrawDone, GXEnableTexOffsets, GXFlush, GXGetProjectionv
+    GXGetTexBufferSize, GXGetViewportv, GXGetYScaleFactor, GXInit
+    GXInitFogAdjTable, GXInitLightAttn, GXInitLightColor, GXInitLightDir
+    GXInitLightDistAttn, GXInitLightPos, GXInitLightSpot, GXInitTexObj
+    GXInitTexObjCI, GXInitTexObjLOD, GXInitTexObjWrapMode, GXInitTlutObj
+    GXInvalidateTexAll, GXInvalidateVtxCache, GXLoadLightObjImm, GXLoadNrmMtxImm
+    GXLoadPosMtxImm, GXLoadTexMtxImm, GXLoadTexObj, GXLoadTlut, GXPixModeSync
+    GXProject, GXSetAlphaCompare, GXSetAlphaUpdate, GXSetArray, GXSetBlendMode
+    GXSetChanAmbColor, GXSetChanCtrl, GXSetChanMatColor, GXSetClipMode
+    GXSetCoPlanar, GXSetColorUpdate, GXSetCopyClamp, GXSetCopyClear
+    GXSetCopyFilter, GXSetCullMode, GXSetCurrentMtx, GXSetDispCopyDst
+    GXSetDispCopyGamma, GXSetDispCopySrc, GXSetDispCopyYScale, GXSetDither
+    GXSetDrawDone, GXSetDrawDoneCallback, GXSetDrawSync, GXSetDrawSyncCallback
+    GXSetDstAlpha, GXSetFieldMode, GXSetFog, GXSetFogRangeAdj
+    GXSetIndTexCoordScale, GXSetIndTexMtx, GXSetIndTexOrder, GXSetLineWidth
+    GXSetNumChans, GXSetNumIndStages, GXSetNumTevStages, GXSetNumTexGens
+    GXSetPixelFmt, GXSetPointSize, GXSetProjection, GXSetScissor
+    GXSetTevAlphaIn, GXSetTevAlphaOp, GXSetTevColor, GXSetTevColorIn
+    GXSetTevColorOp, GXSetTevColorS10, GXSetTevDirect, GXSetTevIndirect
+    GXSetTevKAlphaSel, GXSetTevKColor, GXSetTevKColorSel, GXSetTevOp
+    GXSetTevOrder, GXSetTevSwapMode, GXSetTevSwapModeTable, GXSetTexCoordGen2
+    GXSetTexCopyDst, GXSetTexCopySrc, GXSetViewport, GXSetViewportJitter
+    GXSetVtxAttrFmt, GXSetVtxDesc, GXSetZCompLoc, GXSetZMode, GXSetZTexture
+    GXWaitDrawDone, __GXShutdown_800C6260
+
+VI (video): 11
+    VIConfigure, VIFlush, VIGetDTVStatus, VIGetNextField, VIGetTvFormat, VIInit
+    VISetBlack, VISetNextFrameBuffer, VISetPostRetraceCallback
+    VISetPreRetraceCallback, VIWaitForRetrace
+
+OS (threads, alarms, time, memory): 63
+    DBIsDebuggerPresent, LCQueueLength, LCQueueWait, LCStoreData
+    OSAllocFromArenaLo, OSAllocFromHeap, OSCheckHeap, OSClearContext
+    OSCreateAlarm, OSCreateHeap, OSCreateThread, OSDestroyHeap
+    OSDisableInterrupts, OSEnableInterrupts, OSEnableScheduler, OSFreeToHeap
+    OSGetArenaHi, OSGetArenaLo, OSGetConsoleSimulatedMemSize
+    OSGetCurrentContext, OSGetCurrentThread, OSGetProgressiveMode
+    OSGetResetButtonState, OSGetResetCode, OSGetSoundMode, OSGetStackPointer
+    OSGetTick, OSGetTime, OSInitAlarm, OSInitAlloc, OSInitCond
+    OSInitMessageQueue, OSInitMutex, OSInitThreadQueue, OSLink, OSLoadContext
+    OSLockMutex, OSProtectRange, OSRegisterResetFunction, OSReport
+    OSResetSystem, OSRestoreInterrupts, OSResumeThread, OSSetAlarm, OSSetArenaLo
+    OSSetCurrentContext, OSSetCurrentHeap, OSSetErrorHandler, OSSetIdleFunction
+    OSSetProgressiveMode, OSSetSoundMode, OSSetThreadPriority, OSSignalCond
+    OSSleepThread, OSSuspendThread, OSUnlockMutex, OSWaitCond, OSWakeupThread
+    OSYieldThread, PPCSync, __OSDoHotReset, __OSReschedule
+    __OSSetExceptionHandler
+
+Cache (DC/IC): 5
+    DCFlushRange, DCFlushRangeNoSync, DCInvalidateRange, DCStoreRange
+    DCStoreRangeNoSync
+
+DVD (disc): 11
+    DVDClose, DVDConvertPathToEntrynum, DVDGetCommandBlockStatus
+    DVDGetCurrentDiskID, DVDGetDriveStatus, DVDInit, DVDOpen, DVDRead
+    DVDReadAsync, DVDSeekAsyncPrio, DVDSetAutoFatalMessaging
+
+CARD (memory card): 19
+    CARDCancel, CARDCheckAsync, CARDClose, CARDCreateAsync, CARDDeleteAsync
+    CARDFormatAsync, CARDFreeBlocks, CARDGetAttributes, CARDGetResultCode
+    CARDGetSerialNo, CARDGetStatus, CARDInit, CARDMountAsync, CARDOpen
+    CARDProbeEx, CARDSetStatusAsync, CARDUnmount, CARDWriteAsync
+    __CARDEraseSector
+
+PAD / SI (controller): 10
+    PADInit, PADRead, PADRecalibrate, PADSetAnalogMode, PADSetSamplingCallback
+    SIGetTypeAsync, SIInterruptHandler_800CFA60, SIProbe, SISetSamplingRate
+    SITransfer
+
+AI / AR / ARQ / DSP (audio hardware): 18
+    AIInit, AIInitDMA, AIRegisterDMACallback, AIStartDMA, AIStopDMA
+    ARGetBaseAddress, ARGetDMAStatus, ARGetSize, ARInit, ARQGetChunkSize
+    ARQInit, ARQPostRequest, DSPAddTask, DSPGetDMAStatus, DSPHalt, DSPInit
+    DSPReset, DSPSendMailToDSP
+
+THP (video player): 14
+    THPPlayerCalcNeedMemory, THPPlayerClose, THPPlayerDrawCurrentFrame
+    THPPlayerDrawDone, THPPlayerGetAudioInfo, THPPlayerGetFrame
+    THPPlayerGetState, THPPlayerGetVideoInfo, THPPlayerInit, THPPlayerOpen
+    THPPlayerPlay, THPPlayerPrepare, THPPlayerSetBuffer, THPPlayerStop
+
+Matrix and vector math: 35
+    C_MTXFrustum, C_MTXLightFrustum, C_MTXLightOrtho, C_MTXLightPerspective
+    C_MTXLookAt, C_MTXOrtho, C_MTXPerspective, C_QUATRotAxisRad, C_QUATSlerp
+    PSMTXConcat, PSMTXCopy, PSMTXIdentity, PSMTXInvXpose, PSMTXInverse
+    PSMTXMultVec, PSMTXMultVecSR, PSMTXQuat, PSMTXRotAxisRad, PSMTXRotRad
+    PSMTXScale, PSMTXScaleApply, PSMTXTrans, PSMTXTransApply, PSMTXTranspose
+    PSQUATMultiply, PSVECAdd, PSVECCrossProduct, PSVECDistance, PSVECDotProduct
+    PSVECMag, PSVECNormalize, PSVECScale, PSVECSquareDistance, PSVECSquareMag
+    PSVECSubtract
+
+Other: 28
+    OnReset_800AF628, OnReset_800C0734, SPEC2_MakeStatus, TRKDoStep
+    TRKDoWriteMemory, __cvt_fp2unsigned, defaultOptionalCommandChecker
+    fn_8009EFE4, fn_800A1E54, fn_800AAD34, fn_800AB4FC, fn_800ABD68, fn_800AE794
+    fn_800B01AC, fn_800B01C4, fn_800B4C7C, fn_800B5BE4, fn_800BBC7C, fn_800BBCE0
+    fn_800BBE8C, fn_800BBF98, fn_800BBFDC, fn_800BD91C, fn_800BE30C, fn_800BE31C
+    lbl_80478980, lbl_80478990, movieGetStreamIds

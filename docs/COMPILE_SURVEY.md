@@ -21,7 +21,8 @@ Results
     + tools/unify_prototypes.py                  1871 / 1898   98.6%
 
 The last row has 1,898 units because the 4 C++ units are not handled by the
-tool yet.
+tool yet. Later on the same day, hoisting block-scope declarations, per-unit
+defines and the K&R fix brought it to 1,874; see LINK_PROBE.md.
 
 To reproduce:
 
