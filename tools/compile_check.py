@@ -103,7 +103,8 @@ def compile_unit(unit, decomp, out_dir, use_compat):
     if use_compat:
         # Platform overrides must win over the decomp's headers.
         cmd += ["-I", str(ROOT / "platform" / "include"),
-                "-include", str(ROOT / "compat" / "mwcc_compat.h")]
+                "-include", str(ROOT / "compat" / "mwcc_compat.h"),
+                "-include", str(ROOT / "platform" / "include" / "port" / "gc_mem.h")]
     cmd += ["-I", str(decomp), "-I", str(decomp / "include")]
     if unit["lang"] == "c":
         cmd.append("-std=gnu99")

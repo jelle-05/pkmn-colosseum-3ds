@@ -95,12 +95,49 @@ handler setup in `fn_80006250` (main_tail.c), before the heap is set up.
 Each stub writes its name to `sdmc:/colosseum-port-stub.log` and breaks, see
 platform/src/port_stub.c.
 
-One warning from that run: before the stub, `main` clears GameCube low
-memory with `memset((void*)0x80001800, 0, 0x1800)`. Azahar logs 1,536
-unmapped writes for this and carries on. Real hardware would fault. So a
-clean run in Azahar does not prove the code works on a 3DS, and the port
-needs a way to redirect GameCube low-memory addresses (0x80000000-0x80003FFF)
-to a real buffer.
+One warning from the first run: before the stub, `main` clears GameCube low
+memory with `memset((void*)0x80001800, 0, 0x1800)`. Azahar logged 1,536
+unmapped writes for this and carried on. Real hardware would fault. So a
+clean run in Azahar does not prove the code works on a 3DS.
+
+
+Fixed GameCube addresses
+------------------------
+
+Fixed the same day. A 3DS user process cannot map 0x80000000, so the
+addresses are redirected in the code instead.
+
+A survey of the compiled units found constant GameCube addresses used as
+pointers in code in only 8 files:
+
+- low memory in main.c, movie.c, gbaCommunication.c, gs_gfx_range_800D2B90.c
+  and three menu units: the scratch area at 0x80001800 and the bus clock at
+  0x800000F8;
+- the GPU write-gather pipe 0xCC008000 in gs_gfx_layer_state.c (62 stores).
+
+The thousands of other hits are in data_*.c tables, where words such as
+0xC1C1C1C1 (colours) or 0x80FF0000 are typed as void*. They are data, not
+pointers, and are left alone.
+
+unify_prototypes.py now rewrites, inside function bodies only:
+
+    (T*)0x800000F8              ->  (T*)__GC_ADDR(0x800000F8)
+    (T*)(start + 0x80000000)    ->  (T*)__GC_ADDR(start + 0x80000000)
+    *(volatile u16*)0xCC008000 = v;  ->  __GXFifoU16(v);
+
+That is 14 constants, 1 computed address and 62 FIFO stores.
+`__GC_ADDR` (platform/include/port/gc_mem.h) maps the first 16 KB of
+GameCube RAM, cached and uncached, onto `__gc_lowmem`. That buffer is
+filled before main() with the values the boot ROM leaves there (disc ID,
+memory size, bus and CPU clock), see platform/src/gc_lowmem.c. Any other
+fixed address stops the program with a message instead of being silently
+tolerated by the emulator.
+
+After the change Azahar logs no unmapped accesses, and the boot still stops
+at the first stub, `OSProtectRange`.
+
+The FIFO stores go to `__GXFifoPtr`, which is NULL until the platform GX
+layer sets it up. That is the GX layer's first job.
 
 
 Checking that the rewrite is still behaviour-neutral
@@ -121,7 +158,6 @@ through the tool:
 Next steps
 ----------
 
-- Redirect GameCube low-memory accesses to a buffer.
 - Start the platform layer with what the boot reaches first: OS (memory,
   arena, threads, alarms, interrupts), then DVD, so the game can load its
   first files. Implement it so that each stub replaced moves the first-stub

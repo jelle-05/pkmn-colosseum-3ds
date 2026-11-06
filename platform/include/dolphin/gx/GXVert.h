@@ -11,26 +11,7 @@
 #define DOLPHIN_GX_GXVERT_H
 
 #include "dolphin/types.h"
-
-/* Current write position, owned by platform/gx. */
-extern u8* __GXFifoPtr;
-
-static inline void __GXFifoU8(u8 v) { *__GXFifoPtr++ = v; }
-static inline void __GXFifoU16(u16 v)
-{
-    __builtin_memcpy(__GXFifoPtr, &v, 2);
-    __GXFifoPtr += 2;
-}
-static inline void __GXFifoU32(u32 v)
-{
-    __builtin_memcpy(__GXFifoPtr, &v, 4);
-    __GXFifoPtr += 4;
-}
-static inline void __GXFifoF32(f32 v)
-{
-    __builtin_memcpy(__GXFifoPtr, &v, 4);
-    __GXFifoPtr += 4;
-}
+#include "port/gc_mem.h"    /* __GXFifoPtr and the __GXFifo* writers */
 
 #define __GXW_u8 __GXFifoU8
 #define __GXW_u16 __GXFifoU16

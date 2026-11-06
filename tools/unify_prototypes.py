@@ -284,6 +284,7 @@ def preprocess(unit, decomp, out_dir):
            *("-D" + d for d in unit.get("defines", [])),
            "-I", str(ROOT / "platform" / "include"),
            "-include", str(ROOT / "compat" / "mwcc_compat.h"),
+           "-include", str(ROOT / "platform" / "include" / "port" / "gc_mem.h"),
            "-I", str(decomp), "-I", str(decomp / "include"),
            str(decomp / unit["source"]), "-o", str(out)]
     p = subprocess.run(cmd, capture_output=True, text=True)
@@ -673,6 +674,114 @@ def rewrite_unit(u, text, defs, stats):
     return prelude + "".join(out)
 
 
+GC_HEX = r"0x[0-9A-Fa-f]{8}"
+CAST_PTR = r"\(\s*(?:(?:const|volatile)\s+)*[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*\s*\*+\s*\)\s*"
+FIFO_WRITE = re.compile(r"\*\s*\(\s*volatile\s+(u8|s8|u16|s16|u32|s32|f32|unsigned char|unsigned short|"
+                        r"unsigned long|float)\s*\*\s*\)\s*0x[cC][cC]008000\s*=")
+CAST_CONST = re.compile("(" + CAST_PTR + ")(" + GC_HEX + r")\b")
+CAST_EXPR = re.compile("(" + CAST_PTR + r")\(")
+FIFO_FN = {"u8": "U8", "s8": "U8", "unsigned char": "U8", "u16": "U16", "s16": "U16",
+           "unsigned short": "U16", "u32": "U32", "s32": "U32", "unsigned long": "U32",
+           "f32": "F32", "float": "F32"}
+
+
+def gc_fixed(value):
+    """Is this a GameCube address the port cannot use as-is?"""
+    return (0x80000000 <= value < 0x82000000 or 0xC0000000 <= value < 0xC2000000
+            or 0xCC000000 <= value < 0xCD000000 or 0xE0000000 <= value < 0xE0004000)
+
+
+def function_bodies(text):
+    """(start, end) of every top-level function body, braces included."""
+    bodies = []
+    for s, e, head, depth, kind in statements(text):
+        if kind != "def" or depth != 0:
+            continue
+        h = clean(PP_LINE.sub(" ", head))
+        if not h or h.endswith("=") or h.startswith(("typedef", "struct", "union", "enum")) \
+                or re.search(r"\b(struct|union|enum)\s*\w*$", h):
+            continue
+        d = 0
+        for kind_, val, ts, te in tokens(text[e:]):
+            if val == "{":
+                d += 1
+            elif val == "}":
+                d -= 1
+                if d == 0:
+                    bodies.append((e, e + te))
+                    break
+    return bodies
+
+
+def matching_paren(text, i):
+    """Index just past the ')' matching the '(' at text[i]."""
+    d = 0
+    for j in range(i, len(text)):
+        if text[j] == "(":
+            d += 1
+        elif text[j] == ")":
+            d -= 1
+            if d == 0:
+                return j + 1
+    return None
+
+
+def redirect_fixed_addresses(text, stats):
+    """Rewrite fixed GameCube addresses inside function bodies; see
+    platform/include/port/gc_mem.h. Data initializers are left alone: there
+    the words are usually colours or flags typed as void*."""
+    out, pos = [], 0
+    for bs, be in function_bodies(text):
+        body = text[bs:be]
+
+        # GX FIFO stores first, so their address is not taken by CAST_CONST.
+        parts, p = [], 0
+        for m in FIFO_WRITE.finditer(body):
+            if m.start() < p:
+                continue
+            end = body.find(";", m.end())
+            if end < 0:
+                continue
+            parts.append(body[p:m.start()])
+            parts.append(f"__GXFifo{FIFO_FN[m.group(1)]}({body[m.end():end].strip()})")
+            p = end
+            stats["fifo_writes"] += 1
+        parts.append(body[p:])
+        body = "".join(parts)
+
+        def const_sub(m):
+            if not gc_fixed(int(m.group(2), 16)):
+                return m.group(0)
+            stats["fixed_addresses"] += 1
+            return f"{m.group(1)}__GC_ADDR({m.group(2)})"
+        body = CAST_CONST.sub(const_sub, body)
+
+        # (T*)(expr) where expr contains a fixed address, e.g. start + 0x80000000.
+        parts, p = [], 0
+        for m in CAST_EXPR.finditer(body):
+            if m.start() < p:
+                continue
+            op_start = m.end() - 1
+            op_end = matching_paren(body, op_start)
+            if op_end is None:
+                continue
+            operand = body[op_start:op_end]
+            if "__GC_ADDR" in operand or not any(gc_fixed(int(h, 16)) for h in re.findall(GC_HEX, operand)):
+                continue
+            parts.append(body[p:m.end() - 1])
+            parts.append(f"__GC_ADDR{operand}")
+            p = op_end
+            stats["fixed_address_exprs"] += 1
+        parts.append(body[p:])
+        body = "".join(parts)
+
+        out.append(text[pos:bs])
+        out.append(body)
+        pos = be
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--objects", type=Path, default=ROOT / "build" / "objects.json")
@@ -697,11 +806,13 @@ def main():
 
     stats = {"aliased_names": 0, "uses_renamed": 0, "calls_cast": 0,
              "static_fixed": 0, "implicit_views": 0, "hoisted": 0, "weak_inline": 0,
+             "fifo_writes": 0, "fixed_addresses": 0, "fixed_address_exprs": 0,
              "narrowing": defaultdict(set), "float_abi": defaultdict(set),
              "float_unfixed": defaultdict(set)}
     work = [(u, t) for u, t in pp if not args.only or args.only in u["source"]]
     for u, text in work:
         new = rewrite_unit(u, strip_extern_c(text), defs, stats)
+        new = redirect_fixed_addresses(new, stats)
         if u["module"] != "main":
             # Every REL defines its own _prolog/_epilog/_unresolved. Linked
             # statically they need distinct names; the platform's OSLink
@@ -734,6 +845,8 @@ def main():
     print(f"implicit-call views: {stats['implicit_views']}, extern-before-static fixed: "
           f"{stats['static_fixed']}, block-scope declarations hoisted: {stats['hoisted']}, "
           f"inline functions made weak: {stats['weak_inline']}")
+    print(f"fixed GameCube addresses redirected: {stats['fixed_addresses']} constants, "
+          f"{stats['fixed_address_exprs']} computed, {stats['fifo_writes']} GX FIFO writes")
     print(f"float ABI: {len(stats['float_abi'])} functions fixed, "
           f"{len(stats['float_unfixed'])} unprototyped without a known definition")
 
