@@ -1,0 +1,53 @@
+# Field layouts for game data the decomp stores as big-endian byte arrays.
+#
+# Many data units define objects as `u8 lbl_xxx[N] = { 0x02, 0x80, ... }`,
+# the bytes in the GameCube's big-endian order. On the little-endian 3DS a
+# 16- or 32-bit field read from such an array comes out byte-swapped.
+# tools/unify_prototypes.py rewrites the initializer of every symbol listed
+# here, reversing the bytes of each multi-byte field.
+#
+#   layout NAME = FIELDS      define a layout; FIELDS are b (1 byte),
+#                             h (2), w (4), d (8), each with an optional
+#                             repeat count: h7 is seven halfwords
+#   SYMBOL NAME               symbol has that layout; if it is a whole
+#                             number of layouts long, it is an array of them
+#
+# Entries need evidence: an SDK type, or the access widths the original
+# code uses on the object.
+
+# tvmode, 7 halfwords (fbWidth .. viHeight), xFBmode, field_rendering and
+# aa, sample_pattern[12][2], vfilter[7], padding to 0x3C
+layout GXRenderModeObj = w h7 w b2 b24 b7 b5
+
+# The SDK's render mode presets (GXNtsc240Ds ... GXEurgb60Hz480IntAa), 60
+# bytes apart; tvmode, fbWidth 640 and the heights decode as such.
+lbl_80312C40 GXRenderModeObj
+lbl_80312C7C GXRenderModeObj
+lbl_80312CB8 GXRenderModeObj
+lbl_80312CF4 GXRenderModeObj
+lbl_80312D30 GXRenderModeObj
+lbl_80312D6C GXRenderModeObj
+lbl_80312DA8 GXRenderModeObj
+lbl_80312DE4 GXRenderModeObj
+lbl_80312E20 GXRenderModeObj
+lbl_80312E5C GXRenderModeObj
+lbl_80312E98 GXRenderModeObj
+lbl_80312ED4 GXRenderModeObj
+lbl_80312F10 GXRenderModeObj
+lbl_80312F4C GXRenderModeObj
+lbl_80312F88 GXRenderModeObj
+lbl_80312FC4 GXRenderModeObj
+lbl_80313000 GXRenderModeObj
+lbl_8031303C GXRenderModeObj
+lbl_80313078 GXRenderModeObj
+lbl_803130B4 GXRenderModeObj
+lbl_803130F0 GXRenderModeObj
+lbl_8031312C GXRenderModeObj
+lbl_80313168 GXRenderModeObj
+lbl_803131A4 GXRenderModeObj
+lbl_803131E0 GXRenderModeObj
+lbl_8031321C GXRenderModeObj
+lbl_80313258 GXRenderModeObj
+lbl_80313294 GXRenderModeObj
+lbl_803132D0 GXRenderModeObj
+lbl_8031330C GXRenderModeObj

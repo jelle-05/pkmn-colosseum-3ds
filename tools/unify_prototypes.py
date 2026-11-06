@@ -254,6 +254,60 @@ def statements(text, with_top=False):
             start = e
 
 
+FIELD = re.compile(r"([bhwd])(\d*)")
+FIELD_SIZE = {"b": 1, "h": 2, "w": 4, "d": 8}
+
+
+def load_data_types(path):
+    """platform/data_types.txt -> {symbol: [field sizes]}"""
+    if not path.is_file():
+        return {}
+    layouts, out = {}, {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        m = re.match(r"layout\s+(\w+)\s*=\s*(.+)$", line)
+        if m:
+            sizes = []
+            for kind, count in FIELD.findall(m.group(2)):
+                sizes += [FIELD_SIZE[kind]] * int(count or 1)
+            layouts[m.group(1)] = sizes
+            continue
+        sym, name = line.split()
+        if name not in layouts:
+            sys.exit(f"data_types.txt: unknown layout {name}")
+        out[sym] = layouts[name]
+    return out
+
+
+INT_LIT = re.compile(r"0[xX][0-9A-Fa-f]+|\d+")
+
+
+def retype_data(text, types, stats):
+    """Reverse the bytes of each multi-byte field in listed byte arrays."""
+    for sym, sizes in types.items():
+        # The definition may carry an alias name (sym__pvN) bound by label.
+        m = re.search(r"\b" + re.escape(sym) + r"(?:__pv\d+)?\s*\[[^\]]*\]\s*(?:__attribute__\(\([^)]*\)\)\s*)?=\s*\{", text)
+        if not m:
+            continue
+        end = text.find("}", m.end())
+        body = text[m.end():end]
+        values = [int(v, 0) for v in INT_LIT.findall(body)]
+        unit = sum(sizes)
+        if not values or len(values) % unit:
+            sys.exit(f"data_types.txt: {sym} is {len(values)} bytes, not a multiple of {unit}")
+        out, pos = [], 0
+        while pos < len(values):
+            for size in sizes:
+                field = values[pos:pos + size]
+                out += field[::-1] if size > 1 else field
+                pos += size
+        text = text[:m.end()] + " " + ", ".join(f"0x{v:02X}" for v in out) + " " + text[end:]
+        stats["data_retyped"] += 1
+    return text
+
+
 def strip_asm_functions(text, unit, stats):
     """Remove MWCC `asm` function definitions, keeping the rest of the unit.
 
@@ -847,13 +901,15 @@ def main():
     stats = {"aliased_names": 0, "uses_renamed": 0, "calls_cast": 0,
              "static_fixed": 0, "implicit_views": 0, "hoisted": 0, "weak_inline": 0,
              "fifo_writes": 0, "fixed_addresses": 0, "fixed_address_exprs": 0,
-             "asm_removed": defaultdict(set),
+             "asm_removed": defaultdict(set), "data_retyped": 0,
              "narrowing": defaultdict(set), "float_abi": defaultdict(set),
              "float_unfixed": defaultdict(set)}
     work = [(u, t) for u, t in pp if not args.only or args.only in u["source"]]
+    data_types = load_data_types(ROOT / "platform" / "data_types.txt")
     for u, text in work:
         new = rewrite_unit(u, strip_asm_functions(strip_extern_c(text), u, stats), defs, stats)
         new = redirect_fixed_addresses(new, stats)
+        new = retype_data(new, data_types, stats)
         if u["module"] != "main":
             # Every REL defines its own _prolog/_epilog/_unresolved. Linked
             # statically they need distinct names; the platform's OSLink
@@ -889,6 +945,7 @@ def main():
           f"inline functions made weak: {stats['weak_inline']}")
     print(f"asm functions removed (C versions belong in platform/src/game_asm): "
           f"{', '.join(sorted(stats['asm_removed'])) or 'none'}")
+    print(f"big-endian data objects retyped (platform/data_types.txt): {stats['data_retyped']}")
     print(f"fixed GameCube addresses redirected: {stats['fixed_addresses']} constants, "
           f"{stats['fixed_address_exprs']} computed, {stats['fifo_writes']} GX FIFO writes")
     print(f"float ABI: {len(stats['float_abi'])} functions fixed, "

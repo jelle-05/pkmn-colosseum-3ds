@@ -19,8 +19,25 @@
 
 #define GC_ARENA_SIZE 0x01300000u
 
+/* __OSArenaHi is the game's own .sbss variable (src/game/data/
+ * sbss_8047A6E8.c); __OSArenaLo lived in the SDK's OS data. */
 void* __OSArenaLo;
-void* __OSArenaHi;
+extern void* __OSArenaHi;
+
+/* Appends a line to sdmc:/colosseum-port.log; for bring-up diagnostics. */
+void __port_log(const char* fmt, ...)
+{
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    FILE* f = fopen("sdmc:/colosseum-port.log", "a");
+    if (f) {
+        fprintf(f, "%s\n", buf);
+        fclose(f);
+    }
+}
 
 __attribute__((constructor(101))) static void os_arena_init(void)
 {
@@ -29,6 +46,7 @@ __attribute__((constructor(101))) static void os_arena_init(void)
         svcBreak(USERBREAK_PANIC);
     __OSArenaLo = arena;
     __OSArenaHi = (char*)arena + GC_ARENA_SIZE;
+    __port_log("arena %p-%p", __OSArenaLo, __OSArenaHi);
 }
 
 /* ---- interrupts ------------------------------------------------------------
@@ -108,6 +126,15 @@ unsigned long OSGetTick(void)
     return (unsigned long)OSGetTime();
 }
 
+/* ---- memory size -------------------------------------------------------------
+ * The SDK reads these from low memory (0x80000028 and 0x800000F0), which
+ * gc_lowmem.c fills with the retail values: 24 MB. */
+
+#include "port/gc_mem.h"
+
+unsigned long OSGetPhysicalMemSize(void) { return *(unsigned long*)__GC_ADDR(0x80000028); }
+unsigned long OSGetConsoleSimulatedMemSize(void) { return *(unsigned long*)__GC_ADDR(0x800000F0); }
+
 /* ---- caches and memory protection -----------------------------------------
  * The GameCube needs explicit flushes before DMA and the GPU read memory.
  * Our DMA is memcpy and our GPU layer reads from the CPU's view, so these
@@ -162,3 +189,12 @@ void OSReport(const char* fmt, ...)
 }
 
 int DBIsDebuggerPresent(void) { return 0; }
+
+/* ---- video and sound settings kept in SRAM on the GameCube --------------- */
+
+static unsigned long progressive_mode, sound_mode = 1;   /* OS_SOUND_MODE_STEREO */
+
+unsigned long OSGetProgressiveMode(void) { return progressive_mode; }
+void OSSetProgressiveMode(unsigned long on) { progressive_mode = on; }
+unsigned long OSGetSoundMode(void) { return sound_mode; }
+void OSSetSoundMode(unsigned long mode) { sound_mode = mode; }

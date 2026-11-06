@@ -22,8 +22,10 @@ Status
   for the 617 symbols that are still missing. In Azahar it starts and runs
   until the first SDK call. See [docs/COMPILE_SURVEY.md](docs/COMPILE_SURVEY.md)
   and [docs/LINK_PROBE.md](docs/LINK_PROBE.md).
-- Phase 2 (platform layer): started. OS, ARAM and DVD basics are in, and the
-  boot runs through main() and the start of the game's init until GXInit.
+- Phase 2 (platform layer): started. OS, ARAM, DVD, input and a first GX/VI
+  layer are in. The boot runs through main(), the game's init and HSD's
+  component setup, presents its first frame, and stops where the OS thread
+  system starts.
   See [docs/BOOT_PROGRESS.md](docs/BOOT_PROGRESS.md). The full work list is
   [docs/PLATFORM_TODO.txt](docs/PLATFORM_TODO.txt).
 

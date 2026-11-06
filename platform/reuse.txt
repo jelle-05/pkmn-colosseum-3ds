@@ -15,3 +15,23 @@ src/dolphin/sdk_exact_8009AFD0.c
 
 # OS: calendar conversion (reads the timer clock through low memory)
 src/dolphin/os/calendar/OSTime.c
+
+# MTX: matrix, vector and quaternion math that is plain C. The units with
+# paired-single assembly inside their functions (PSMTXConcat and friends,
+# PSVEC*, PSMTXRotAxisRad, PSMTXQuat) are implemented in platform/src/mtx.
+src/dolphin/sdk_exact_800A3874.c
+src/dolphin/sdk_exact_800A3744.c
+src/dolphin/sdk_r59_800A335C_o2.c
+src/dolphin/sdk_candidate_800A3C54.c
+src/dolphin/sdk_candidate_800A3CB0.c
+src/dolphin/sdk_candidate_800A3D3C.c
+src/dolphin/sdk_candidate_800A3CB0.c
+src/dolphin/sdk_candidate_800A3D3C.c
+
+# GX: object initialisers. They only fill GXTexObj / GXLightObj in their
+# GameCube layout, which the platform GX layer reads.
+src/dolphin/sdk_range_800BA7C0.c
+src/dolphin/gx/GX_fn_800BA198.c
+src/dolphin/gx/GX_fn_800BA414.c
+src/dolphin/gx/GX_fn_800BA424.c
+src/dolphin/gx/GX_fn_800BA440.c

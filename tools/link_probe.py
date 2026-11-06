@@ -111,13 +111,27 @@ def main():
 
     results = json.loads((ROOT / "build" / "unified" / "compile.json").read_text(encoding="utf-8"))
     objs = [ROOT / "build" / "unified" / "obj" / (r["name"] + ".o") for r in results if r["ok"]]
+
+    # The probe allows the known duplicates, so a platform symbol that the
+    # game also defines would be resolved silently. Refuse that.
+    def defined(obj):
+        out = subprocess.run([str(BIN / "arm-none-eabi-nm.exe"), "--defined-only", str(obj)],
+                             capture_output=True, text=True).stdout
+        return {l.split()[-1] for l in out.splitlines() if len(l.split()) == 3 and l.split()[1] in "TDBRS"}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor() as pool:
+        game_defined = set().union(*pool.map(defined, objs))
+    strong_platform = set().union(*(defined(o) for o in platform_objs))
+    clash = sorted(strong_platform & game_defined)
+    if clash:
+        sys.exit("platform/src defines symbols the game also defines: " + ", ".join(clash))
     rsp = out / "objects.rsp"
     rsp.write_text("\n".join(o.as_posix() for o in objs + [out / "stubs.o"] + platform_objs) + "\n",
                    encoding="utf-8")
     elf = out / "colosseum.elf"
     dup = report.get("duplicates", {})
     cmd = [str(BIN / "arm-none-eabi-gcc.exe"), "-specs=3dsx.specs", *compile_check.ARCH,
-           f"@{rsp.as_posix()}", "-L", str(DEVKITPRO / "libctru" / "lib"), "-lctru", "-lm",
+           f"@{rsp.as_posix()}", "-L", str(DEVKITPRO / "libctru" / "lib"), "-lcitro3d", "-lctru", "-lm",
            f"-Wl,-Map,{(out / 'colosseum.map').as_posix()}", "-o", str(elf)]
     if dup:
         # Known duplicates are listed by link_check; keep the first copy for
