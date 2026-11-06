@@ -92,5 +92,12 @@ reconstructs.
 
 Thanks also to the devkitPro, libctru and citro3d developers.
 
+
+License
+-------
+
+The code in this repository is MIT licensed, see `LICENSE`. The decompilation in
+`decomp/` keeps its own MIT license and copyright notices.
+
 Pokémon Colosseum is © 2003–2004 Pokémon / Nintendo / Creatures / GAME FREAK /
 Genius Sonority. This project is not affiliated with or endorsed by any of them.
