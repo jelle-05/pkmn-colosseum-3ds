@@ -597,6 +597,35 @@ def symbol_addresses(decomp):
     return out
 
 
+def cross_symbol_accesses(access, addrs):
+    """Accesses that use one symbol's address to reach another object.
+    On the GameCube the neighbour is at that offset; in the port's link it
+    is not. Returns [(function, via symbol, offset, width, target symbol)]."""
+    import bisect
+    by_space = defaultdict(list)
+    for name, (space, addr, size) in addrs.items():
+        by_space[space].append((addr, size, name))
+    for v in by_space.values():
+        v.sort()
+    starts = {k: [a for a, _, _ in v] for k, v in by_space.items()}
+    out = set()
+    for sym, accs in access.items():
+        info = addrs.get(sym)
+        if not info or sym.startswith("STACK:"):
+            continue
+        space, addr, size = info
+        if size == 0:
+            continue
+        for (o, w, s, where) in accs:
+            if s is not None or (0 <= o and o + w <= size):
+                continue
+            lst = by_space[space]
+            k = bisect.bisect_right(starts[space], addr + o) - 1
+            target = lst[k][2] if k >= 0 and lst[k][0] <= addr + o < lst[k][0] + max(lst[k][1], 1) else "?"
+            out.add((where.split(" ")[0], sym, o, w, target))
+    return sorted(out)
+
+
 def reattribute(access, arrays, addrs):
     """Move accesses that fall outside their symbol (code addressing a
     struct through a neighbouring label) to the array that contains them."""
@@ -639,11 +668,18 @@ def typed_arrays(decomp):
     out = {}
     pat = re.compile(r"^(?:static\s+)?(?:const\s+)?(" + "|".join(sorted(TYPED, key=len, reverse=True)) +
                      r")\s+(\w+)\s*\[\s*(\d+|0x[0-9A-Fa-f]+)\s*\]\s*=\s*\{", re.M)
+    # dtk's carved data units make every object with relocations a void*[]
+    # of words: pointers and plain numbers mixed, the numbers often read as
+    # halfwords or bytes.
+    ptr = re.compile(r"^(?:static\s+)?(?:const\s+)?void\s*\*\s*(?:const\s+)?(\w+)\s*\[\s*(\d+|0x[0-9A-Fa-f]+)\s*\]\s*=\s*\{",
+                     re.M)
     for p in (decomp / "src").rglob("*.c"):
         t = p.read_text(encoding="utf-8", errors="replace")
         for m in pat.finditer(t):
             e = TYPED[m.group(1)]
             out.setdefault(m.group(2), (e, e * int(m.group(3), 0)))
+        for m in ptr.finditer(t):
+            out.setdefault(m.group(1), (-4, 4 * int(m.group(2), 0)))
     return out
 
 
@@ -691,6 +727,15 @@ def layout_strict(size, accesses):
     exact = [(o, w) for o, w, s, _ in accesses if s is None]
     strided = [(o, w, s) for o, w, s, _ in accesses if isinstance(s, int)]
     unknown = [(o, w) for o, w, s, _ in accesses if s == "?"]
+    # A table of records: when every known stride is the same S, accesses
+    # with an unknown index step through the same records (a pointer from
+    # the table's getter, moved by a computed index).
+    strides = {s for _, _, s in strided}
+    if unknown and len(strides) == 1 and size % next(iter(strides)) == 0:
+        S = next(iter(strides))
+        if S > 4:
+            strided += [(o, w, S) for o, w in unknown]
+            unknown = []
 
     outside = 0
 
@@ -809,6 +854,7 @@ def main():
 
     arrays = u8_arrays(decomp)
     addrs = symbol_addresses(decomp)
+    cross = cross_symbol_accesses(an.access, addrs)
     an.access, moved = reattribute(an.access, arrays, addrs)
     print(f"{moved} accesses moved to the array that contains them")
     verdicts = Counter()
@@ -849,7 +895,7 @@ def main():
     mismatched = []
     for sym, (elem, size) in sorted(typed.items()):
         acc = [a for a in an.access.get(sym, []) if not a[3].endswith("[copy]") and 0 <= a[0] < size]
-        bad = sorted({w for _, w, _, _ in acc if w != elem})
+        bad = sorted({w for _, w, _, _ in acc if w != abs(elem)})
         if bad:
             mismatched.append((sym, elem, size, bad, sorted({x for *_, x in acc})[:4]))
     typed_report = [
@@ -872,18 +918,27 @@ def main():
     # unify_prototypes.py rewrites their values so memory holds the bytes
     # the code expects. Arrays also read with the element width are left
     # alone and reported.
+    # Pointer tables (element -4) are read with both widths by nature: the
+    # words stay words, only the fields the layout splits are rebuilt.
     typed_lines, n = [], 0
+    ptr_unresolved = []
     for s, e, size, bad, _ in mismatched:
         acc = [a for a in an.access.get(s, []) if not a[3].endswith("[copy]") and 0 <= a[0] < size]
-        if any(w == e for _, w, _, _ in acc):
+        if e > 0 and any(w == e for _, w, _, _ in acc):
             continue
         fields, reason = layout_for(size, acc)
         if fields is None:
+            if e < 0:
+                ptr_unresolved.append((s, size, reason))
             continue
         spec = compress(fields) if fields else f"b{size}"
         typed_lines.append(f"layout tgen{n} = {spec}")
-        typed_lines.append(f"typed {s} {e} tgen{n}")
+        typed_lines.append(f"typed {s} {abs(e)} tgen{n}")
         n += 1
+    print(f"pointer tables read with narrower widths: {sum(1 for m in mismatched if m[1] < 0)}, "
+          f"unresolved: {len(ptr_unresolved)}")
+    for s, size, reason in ptr_unresolved[:10]:
+        print(f"    {s} ({size:,} bytes): {reason}")
     if typed_lines:
         lines += ["# Typed arrays read only with narrower widths (element size given).", ""] + typed_lines
     (ROOT / "platform" / "data_types.generated.txt").write_text("\n".join(lines), encoding="utf-8")
@@ -891,6 +946,11 @@ def main():
     (ROOT / "build" / "access_widths.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     (ROOT / "build" / "access_widths_typed.json").write_text(json.dumps(typed_report, indent=1),
                                                              encoding="utf-8")
+    (ROOT / "build" / "cross_symbol.json").write_text(json.dumps(
+        [{"function": f, "via": v, "offset": o, "width": w, "target": t} for f, v, o, w, t in cross],
+        indent=1), encoding="utf-8")
+    print(f"cross-symbol accesses (one symbol's address used to reach another): {len(cross)} "
+          f"in {len({c[0] for c in cross})} functions -> build/cross_symbol.json")
 
     total = sum(arrays.values())
     print(f"{len(objs)} objects, {len(functions)} functions")

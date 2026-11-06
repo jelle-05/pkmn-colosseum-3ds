@@ -143,6 +143,41 @@ readers disagree about the field at +0 of each 24-byte entry. Two kinds:
 The list is in build/access_widths.json (verdict per symbol).
 
 
+Pointer tables
+--------------
+
+dtk carves every data object that holds a relocation as a void*[] of
+words: pointers and plain numbers mixed, about 600 KB in 111 tables. The
+numbers are right as words, but the code often reads halfwords or bytes
+out of them (the menu item table lbl_802EF0A8, 0x1C-byte records, reads
+its chain link as an s16 at +0x18). access_widths.py now treats these as
+typed arrays with 4-byte elements, and unify_prototypes.py rebuilds the
+number words from the layout while pointer words stay as they are. When
+all known strides into a table agree, accesses with an unknown index get
+that stride too (records reached through a getter and a computed index).
+
+
+Bitfields
+---------
+
+The PowerPC EABI fills a bitfield container from the most significant bit,
+ARM from the least significant. unify_prototypes.py reverses the members
+within each container and puts the unused bits first, so every field has
+the bit position MWCC gave it, also for code that tests the raw byte.
+
+
+Neighbouring symbols
+--------------------
+
+Some code reaches one object through another's address: OSAlloc's heap
+variables through &__OSStartTime + 0x10, or a byte struct dtk split into
+labels (lbl_80478D78 + 3 is lbl_80478D7B). tools/gen_layout.py links all
+data at its GameCube offset within its section (each symbol has its own
+section through -fdata-sections), and a missing label that lies inside a
+larger object becomes an alias of it. build/cross_symbol.json lists the
+accesses; tools/check_layout.py compares the distances.
+
+
 Next steps
 ----------
 

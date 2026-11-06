@@ -41,6 +41,31 @@ At OSSetIdleFunction, HSD_InitComponent has run: video set up, the first
 frame presented through GXCopyDisp (sdmc:/colosseum-port-frames.log), the
 HSD heap, lights and input. The next step is the OS thread system.
 
+From here no stub is reached any more; the game stops on data problems
+instead, found with the heartbeat in the port log and `run_azahar.py --gdb`
+(a backtrace of every thread at the first heartbeat).
+
+    where it stopped           added to get past it
+    -------------------------  -----------------------------------------------
+    (no stub, no frames)       os/: threads on 3DS threads, interrupt thread
+                               for retrace, alarms and DVD completions,
+                               message queues, mutexes, alarms; the game's
+                               coroutines (threadExecute, _threadSwitch) on
+                               an ARM context switch; THP placeholder; the
+                               PowerPC-varargs menu functions replaced
+    GSmemGetFreeTotal          reads OSAlloc's heap variables through
+                               &__OSStartTime + 0x10. Data is now linked at
+                               its GameCube offsets (tools/gen_layout.py);
+                               labels inside a larger object are aliases
+    windowOpen, loop           menu items: a void* table read as halfwords
+                               (pointer tables now get field layouts too) and
+                               bitfields (MWCC fills them from the top bit;
+                               the tool reverses them per container)
+    _fsysGetFilename, loop     the archive table of contents is file data
+                               from the disc, big-endian. Next: file formats
+
+The second thread (prio 16) is running at that point.
+
 The heap failure on the way showed the data problem predicted in the
 roadmap: the decomp stores many objects as big-endian u8 arrays (about
 500 KB in 974 arrays). A 640-pixel-wide render mode read 0x8002 as its
@@ -59,17 +84,25 @@ The DVD layer reads the user's own disc image from
 `%APPDATA%\Azahar\sdmc\3ds\colosseum\GC6E01.iso`. Then:
 
     python tools/link_probe.py
-    python tools/run_azahar.py
+    python tools/run_azahar.py           # or --gdb for backtraces
 
 
 Platform pieces so far
 ----------------------
 
-    platform/src/os/os_core.c     arena (19 MB, as on the GameCube), interrupts
-                                  (a flag; pending work runs when they come
-                                  back on), OSGetTime/OSGetTick in GameCube
-                                  ticks from 2000-01-01, caches, OSReport,
-                                  error handlers
+    platform/src/os/os_core.c     arena (19 MB, as on the GameCube),
+                                  OSGetTime/OSGetTick in GameCube ticks from
+                                  2000-01-01, caches, OSReport, error and
+                                  reset handlers, the port log
+    platform/src/os/os_irq.c      interrupts: a recursive lock, and a thread
+                                  that delivers retrace, alarms and DVD
+                                  completions at their due time
+    platform/src/os/os_thread.c   OS threads on 3DS threads (priority 0x19 +
+                                  GameCube priority), sleep queues, heartbeat
+    platform/src/os/os_sync.c     message queues, mutexes, conditions, alarms
+    platform/src/thread/          ARM context switch for the game's coroutines
+    platform/src/game_patch/      game functions replaced (platform/replace.txt)
+    platform/src/thp/             movie player placeholder (movies are skipped)
     platform/src/os/ar.c          ARAM as a 16 MB buffer, DMA and ARQ as memcpy
     platform/src/os/lc.c          the locked cache as a 16 KB buffer
     platform/src/audio/ai.c       placeholder audio interface
@@ -87,7 +120,6 @@ Platform pieces so far
     platform/data_types.txt       field layouts for big-endian data objects
 
 Still in the game_asm work list (removed from their units by
-unify_prototypes.py): the game's thread system (_threadSwitch,
-threadExecute, threadLoad/Save*Registers, fn_800F02F4), the script engine's
-cms_CallStdTrampoline, MusyX reverb (HandleReverb, DoCrossTalk) and
-HSD_SaveContext.
+unify_prototypes.py): the script engine's cms_CallStdTrampoline, MusyX
+reverb (HandleReverb, DoCrossTalk) and HSD_SaveContext. The game's thread
+system is in game_asm/gs_thread.c.

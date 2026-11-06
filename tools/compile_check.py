@@ -43,7 +43,14 @@ ARCH = ["-march=armv6k", "-mtune=mpcore", "-mfloat-abi=hard", "-mtp=soft"]
 #   -fno-strict-aliasing the decomp reads data through mismatched pointer types
 #   -fwrapv              signed overflow wraps, as on the GameCube
 #   -funsigned-char      plain char is unsigned on both, but say so
-SEMANTICS = ["-fgnu89-inline", "-fno-strict-aliasing", "-fwrapv", "-funsigned-char"]
+#   -fno-toplevel-reorder  keep globals in source order, so objects the game
+#                        reaches through a neighbouring label stay at the
+#                        GameCube distance (tools/check_layout.py)
+#   -fno-common          tentative definitions get real storage in order
+#   -fdata-sections      one section per data symbol, so tools/gen_layout.py
+#                        can place each at its retail offset
+SEMANTICS = ["-fgnu89-inline", "-fno-strict-aliasing", "-fwrapv", "-funsigned-char",
+             "-fno-toplevel-reorder", "-fno-common", "-fdata-sections"]
 
 # Warnings that are portability bugs on ARM, not style. Counted separately.
 PORTABILITY_WARNINGS = {

@@ -292,6 +292,52 @@ def load_data_types(path):
 INT_LIT = re.compile(r"0[xX][0-9A-Fa-f]+|\d+")
 
 
+NUM_WORD = re.compile(r"^\s*(?:\(\s*void\s*\*\s*\)\s*)?(0[xX][0-9A-Fa-f]+|\d+)[uUlL]*\s*$")
+
+
+def retype_pointer_table(text, start, end, body, sizes, stats):
+    """A void*[] of words, pointers and plain numbers mixed (dtk's carved
+    data). Pointer words stay as they are; a number word is rebuilt like a
+    typed element. A layout field that splits a pointer word is left alone
+    and counted."""
+    elems = [e for e in body.split(",")]
+    if elems and not elems[-1].strip():
+        elems = elems[:-1]
+    be = bytearray()
+    is_ptr = []
+    for e in elems:
+        mm = NUM_WORD.match(e)
+        if mm:
+            be += (int(mm.group(1), 0) & 0xFFFFFFFF).to_bytes(4, "big")
+            is_ptr.append(False)
+        else:
+            be += b"\0\0\0\0"
+            is_ptr.append(True)
+    out, pos, bad = bytearray(be), 0, 0
+    while pos < len(be):
+        for size in sizes:
+            if pos >= len(be):
+                break
+            w0, w1 = pos // 4, (pos + size - 1) // 4
+            touches_ptr = any(is_ptr[w] for w in range(w0, min(w1, len(is_ptr) - 1) + 1))
+            if touches_ptr:
+                if not (size == 4 and pos % 4 == 0):
+                    bad += 1
+            elif size > 1:
+                out[pos:pos + size] = be[pos:pos + size][::-1]
+            pos += size
+    new = []
+    for i, e in enumerate(elems):
+        if is_ptr[i]:
+            new.append(e.strip())
+        else:
+            new.append(f"(void*)0x{int.from_bytes(out[4 * i:4 * i + 4], 'little'):08X}u")
+    text = text[:start] + " " + ", ".join(new) + " " + text[end:]
+    stats["data_retyped"] += 1
+    stats["pointer_fields_split"] = stats.get("pointer_fields_split", 0) + bad
+    return text
+
+
 def retype_typed(text, sym, elem, sizes, stats):
     """A typed array the code reads with narrower widths. Rebuild its values
     so that, stored little-endian, memory holds what the code expects: the
@@ -302,6 +348,8 @@ def retype_typed(text, sym, elem, sizes, stats):
         return text
     end = text.find("}", m.end())
     body = text[m.end():end]
+    if re.search(r"\bvoid\s*\*", text[max(0, m.start() - 40):m.start()]):
+        return retype_pointer_table(text, m.end(), end, body, sizes, stats)
     if re.search(r"\d\.\d|[eE][+-]?\d|\bf\b", body):
         return text              # float literals: not handled here
     mask = (1 << (8 * elem)) - 1
@@ -346,21 +394,96 @@ def retype_data(text, types, stats):
     return text
 
 
+VA_STRUCT = re.compile(r"typedef\s+struct\s*\w*\s*\{([^{}]*)\}\s*(\w+)\s*(\[\s*1\s*\])?\s*;")
+VA_START = re.compile(r"\(\s*\(\s*void\s*\)\s*\(?\s*(\w+)\s*\)?\s*,\s*__builtin_va_info\s*\(\s*&\s*\(?\s*(\w+)\s*\)?\s*\)\s*\)")
+VA_INFO_BARE = re.compile(r"__builtin_va_info\s*\(\s*&\s*\(?\s*(\w+)\s*\)?\s*\)")
+VA_TYPED = re.compile(r"\(\s*\*\s*\(\s*\(\s*([^()]+?)\s*\*\s*\)\s*__va_arg\s*\(\s*(\w+)\s*,\s*_var_arg_typeof\s*\([^()]*\)\s*\)\s*\)\s*\)")
+VA_CAST = re.compile(r"\*\s*\(\s*([^()]+?)\s*\*\s*\)\s*__va_arg\s*\(\s*(\w+)\s*,\s*(\d)\s*\)")
+VA_PLAIN = re.compile(r"\*\s*__va_arg\s*\(\s*(\w+)\s*,\s*(\d)\s*\)")
+VA_CODE = {"1": "unsigned long", "2": "double", "3": "long long"}
+
+
+def rewrite_ppc_varargs(text, unit, stats):
+    """Turn the decomp's hand-made PowerPC varargs into the compiler's.
+
+    A few units define MWCC's va_list (a struct with gpr/fpr counters and
+    save-area pointers) and va_start/va_arg as __builtin_va_info/__va_arg
+    themselves, bypassing crt/stdarg.h. On ARM that cannot work; rewrite the
+    types and the macro expansions to __builtin_va_*."""
+    if "__builtin_va_info" not in text and "__va_arg" not in text:
+        return text
+    # 1. The va_list types.
+    names = []
+    def struct_sub(m):
+        if re.search(r"\bgpr\s*;", m.group(1)) and re.search(r"\bfpr\s*;", m.group(1)):
+            if m.group(3):
+                return f"typedef __builtin_va_list {m.group(2)};"
+            names.append(m.group(2))
+        return m.group(0)
+    text = VA_STRUCT.sub(struct_sub, text)
+    for n in names:
+        text = re.sub(r"typedef\s+" + re.escape(n) + r"\s+(\w+)\s*\[\s*1\s*\]\s*;", r"typedef __builtin_va_list \1;", text)
+        text = re.sub(r"\b" + re.escape(n) + r"\s+(\w+)\s*\[\s*1\s*\]", r"__builtin_va_list \1", text)
+    # 2. va_start, with and without the (void)last wrapper.
+    text = VA_START.sub(lambda m: f"__builtin_va_start({m.group(2)}, {m.group(1)})", text)
+    if VA_INFO_BARE.search(text):
+        out, pos = [], 0
+        for m in VA_INFO_BARE.finditer(text):
+            head = text[max(0, m.start() - 20000):m.start()]
+            heads = re.findall(r"\(([^()]*?),\s*\.\.\.\s*\)\s*\{", head)
+            last = re.findall(r"(\w+)\s*$", heads[-1]) if heads else []
+            if not last:
+                stats["varargs_unresolved"].add(unit["source"])
+                continue
+            out.append(text[pos:m.start()])
+            out.append(f"__builtin_va_start({m.group(1)}, {last[0]})")
+            pos = m.end()
+        out.append(text[pos:])
+        text = "".join(out)
+    # 3. va_arg.
+    text = VA_TYPED.sub(lambda m: f"__builtin_va_arg({m.group(2)}, {m.group(1)})", text)
+    text = VA_CAST.sub(lambda m: f"(({m.group(1)})__builtin_va_arg({m.group(2)}, {VA_CODE.get(m.group(3), 'unsigned long')}))", text)
+    text = VA_PLAIN.sub(lambda m: f"__builtin_va_arg({m.group(1)}, {VA_CODE.get(m.group(2), 'unsigned long')})", text)
+    if re.search(r"__builtin_va_info\s*\(|[^\w]__va_arg\s*\(\s*\w+\s*,", text.replace("extern", "")):
+        rest = [l for l in text.splitlines() if ("__builtin_va_info(" in l or "__va_arg(" in l)
+                and "extern" not in l and not re.search(r"\b__va_arg\s*\([^)]*\)\s*;", l)]
+        if rest:
+            stats["varargs_unresolved"].add(unit["source"])
+    stats["varargs_units"] += 1
+    return text
+
+
+REPLACED = set()
+
+
+def load_replaced(path):
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if line:
+                REPLACED.add(line)
+
+
 def strip_asm_functions(text, unit, stats):
-    """Remove MWCC `asm` function definitions, keeping the rest of the unit.
+    """Remove MWCC `asm` function definitions, keeping the rest of the unit,
+    and the definitions of functions listed in platform/replace.txt.
 
     A unit with one first-party assembly routine (GSmathInit, the thread
     switch) otherwise fails as a whole, taking hundreds of lines of C with
     it. The removed functions are recorded; their C versions live in
-    platform/src/game_asm/."""
+    platform/src/game_asm/ and platform/src/game_patch/."""
     out, pos = [], 0
     for s, e, head, depth, kind in statements(text):
         if kind != "def" or depth != 0:
             continue
         h = clean(PP_LINE.sub(" ", head))
-        if not re.match(r"^(static\s+|inline\s+)*asm\b", h):
-            continue
         m = re.search(r"(\w+)\s*\(", h)
+        is_asm = re.match(r"^(static\s+|inline\s+)*asm\b", h)
+        is_replaced = m and m.group(1) in REPLACED and not re.match(r"^(static\b)", h)
+        if not is_asm and not is_replaced:
+            continue
+        if is_replaced:
+            stats["replaced"].add(m.group(1))
         d = 0
         end = None
         for kind_, val, ts, te in tokens(text[e:]):
@@ -378,7 +501,8 @@ def strip_asm_functions(text, unit, stats):
         out.append(text[pos:start])
         out.append(re.sub(r"[^\n]", " ", text[start:end]))
         pos = end
-        stats["asm_removed"][m.group(1) if m else "?"].add(unit["source"])
+        if is_asm:
+            stats["asm_removed"][m.group(1) if m else "?"].add(unit["source"])
     out.append(text[pos:])
     return "".join(out)
 
@@ -858,6 +982,89 @@ def matching_paren(text, i):
     return None
 
 
+BF_TYPES = {"u8": 1, "s8": 1, "char": 1, "unsigned char": 1, "signed char": 1,
+            "u16": 2, "s16": 2, "short": 2, "unsigned short": 2, "signed short": 2,
+            "u32": 4, "s32": 4, "int": 4, "unsigned int": 4, "signed int": 4, "unsigned": 4,
+            "signed": 4, "long": 4, "unsigned long": 4, "BOOL": 4}
+BF_MEMBER = re.compile(
+    r"(?<![\w.])(?P<type>(?:(?:const|volatile)\s+)*(?:unsigned\s+char|signed\s+char|unsigned\s+short|signed\s+short|"
+    r"unsigned\s+int|signed\s+int|unsigned\s+long|unsigned|signed|u8|s8|u16|s16|u32|s32|char|short|int|long|BOOL))"
+    r"\s+(?P<name>[A-Za-z_]\w*)?\s*:\s*(?P<bits>\d+)\s*;")
+
+
+def reverse_bitfields(text, stats):
+    """Give bitfields the bit positions MWCC gives them.
+
+    The PowerPC EABI fills a bitfield container from its most significant
+    bit, ARM's AAPCS from its least significant. Both put a field that does
+    not fit into the next container of its declared type. So within each
+    container the members are written in reverse order, with the unused
+    bits as an unnamed member first (they were the low bits): the value of
+    the container then has every field where MWCC had it, and byte reads
+    such as `(*(u8*)p >> 6) & 1` in other code still agree.
+
+    Runs are consecutive bitfield members of one declared type; a member of
+    another type ends the run (reported when it is a bitfield too)."""
+    out, pos = [], 0
+    n_runs = 0
+    for run in _bitfield_runs(text):
+        start, end, members, width = run
+        bits_total = width * 8
+        containers, cur, used = [], [], 0
+        for raw, typ, name, bits in members:
+            if bits == 0:
+                if cur:
+                    containers.append((cur, used))
+                cur, used = [], 0
+                continue
+            if used + bits > bits_total:
+                containers.append((cur, used))
+                cur, used = [], 0
+            cur.append((raw, typ, name, bits))
+            used += bits
+        if cur:
+            containers.append((cur, used))
+        lines = []
+        for members_c, used_c in containers:
+            typ = members_c[0][1]
+            if used_c < bits_total:
+                lines.append(f"{typ} : {bits_total - used_c};")
+            for raw, typ_m, name, bits in reversed(members_c):
+                lines.append(raw.strip())
+        out.append(text[pos:start])
+        out.append(" ".join(lines))
+        pos = end
+        n_runs += 1
+    out.append(text[pos:])
+    stats["bitfield_runs"] = stats.get("bitfield_runs", 0) + n_runs
+    return "".join(out)
+
+
+def _bitfield_runs(text):
+    """(start, end, [(raw, type, name, bits)], container bytes) for each run."""
+    runs = []
+    cur = []
+    last_end = None
+    for m in BF_MEMBER.finditer(text):
+        typ = " ".join(m.group("type").split())
+        base = re.sub(r"^(?:(?:const|volatile)\s+)*", "", typ)
+        width = BF_TYPES.get(base)
+        adjacent = last_end is not None and text[last_end:m.start()].strip() == ""
+        if cur and (not adjacent or cur[0][4] != width):
+            runs.append(cur)
+            cur = []
+        cur.append((m.start(), m.end(), (m.group(0), typ, m.group("name"), int(m.group("bits"))), width, width))
+        last_end = m.end()
+    if cur:
+        runs.append(cur)
+    out = []
+    for r in runs:
+        if len(r) == 1 and r[0][2][3] == r[0][3] * 8:
+            continue                          # one full-width field: nothing to move
+        out.append((r[0][0], r[-1][1], [x[2] for x in r], r[0][3]))
+    return out
+
+
 def redirect_fixed_addresses(text, stats):
     """Rewrite fixed GameCube addresses inside function bodies; see
     platform/include/port/gc_mem.h. Data initializers are left alone: there
@@ -940,16 +1147,20 @@ def main():
              "static_fixed": 0, "implicit_views": 0, "hoisted": 0, "weak_inline": 0,
              "fifo_writes": 0, "fixed_addresses": 0, "fixed_address_exprs": 0,
              "asm_removed": defaultdict(set), "data_retyped": 0,
+             "varargs_units": 0, "varargs_unresolved": set(), "replaced": set(),
              "narrowing": defaultdict(set), "float_abi": defaultdict(set),
              "float_unfixed": defaultdict(set)}
     work = [(u, t) for u, t in pp if not args.only or args.only in u["source"]]
     # Layouts derived by tools/access_widths.py, then the hand-written ones,
     # which win for any symbol in both.
+    load_replaced(ROOT / "platform" / "replace.txt")
     data_types = load_data_types(ROOT / "platform" / "data_types.generated.txt")
     data_types.update(load_data_types(ROOT / "platform" / "data_types.txt"))
     for u, text in work:
-        new = rewrite_unit(u, strip_asm_functions(strip_extern_c(text), u, stats), defs, stats)
+        pre = rewrite_ppc_varargs(strip_asm_functions(strip_extern_c(text), u, stats), u, stats)
+        new = rewrite_unit(u, pre, defs, stats)
         new = redirect_fixed_addresses(new, stats)
+        new = reverse_bitfields(new, stats)
         new = retype_data(new, data_types, stats)
         if u["module"] != "main":
             # Every REL defines its own _prolog/_epilog/_unresolved. Linked
@@ -986,7 +1197,15 @@ def main():
           f"inline functions made weak: {stats['weak_inline']}")
     print(f"asm functions removed (C versions belong in platform/src/game_asm): "
           f"{', '.join(sorted(stats['asm_removed'])) or 'none'}")
-    print(f"big-endian data objects retyped (platform/data_types.txt): {stats['data_retyped']}")
+    print(f"big-endian data objects retyped (platform/data_types.txt): {stats['data_retyped']}"
+          f" ({stats.get('pointer_fields_split', 0)} layout fields split a pointer word, left alone)")
+    print(f"bitfield runs given MWCC bit order: {stats.get('bitfield_runs', 0)}")
+    missing = REPLACED - stats["replaced"]
+    print(f"functions replaced (platform/replace.txt): {len(stats['replaced'])}"
+          + (f"; listed but not found: {', '.join(sorted(missing))}" if missing else ""))
+    print(f"PowerPC varargs rewritten in {stats['varargs_units']} units"
+          + (f"; NOT resolved in: {', '.join(sorted(stats['varargs_unresolved']))}"
+             if stats["varargs_unresolved"] else ""))
     print(f"fixed GameCube addresses redirected: {stats['fixed_addresses']} constants, "
           f"{stats['fixed_address_exprs']} computed, {stats['fifo_writes']} GX FIFO writes")
     print(f"float ABI: {len(stats['float_abi'])} functions fixed, "
