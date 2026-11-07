@@ -1,4 +1,4 @@
-﻿/*
+/*
  * gs_scratch.c - C version of GSscratchInit (0x800EEDF8).
  *
  * The decomp keeps GSscratchInit as the developers' own assembly

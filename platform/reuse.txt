@@ -12,6 +12,8 @@ src/dolphin/sdk_range_8009A9D8.c
 src/dolphin/sdk_exact_8009ABD0.c
 src/dolphin/sdk_candidate_8009AC50.c
 src/dolphin/sdk_exact_8009AFD0.c
+# DLInsert, OSFreeToHeap's free-list merge
+src/dolphin/sdk_exact_8009A92C.c
 
 # OS: calendar conversion (reads the timer clock through low memory)
 src/dolphin/os/calendar/OSTime.c
@@ -35,3 +37,5 @@ src/dolphin/gx/GX_fn_800BA198.c
 src/dolphin/gx/GX_fn_800BA414.c
 src/dolphin/gx/GX_fn_800BA424.c
 src/dolphin/gx/GX_fn_800BA440.c
+# GXInitLightSpot, GXInitLightDistAttn: attenuation coefficients, math only
+src/dolphin/sdk_range_800BA1B4.c

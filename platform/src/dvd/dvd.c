@@ -1,4 +1,4 @@
-﻿/*
+/*
  * dvd.c - the Dolphin DVD library on top of the game's own disc image.
  *
  * The user's GC6E01 ISO lives on the SD card. DVDInit reads its header and

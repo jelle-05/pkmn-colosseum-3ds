@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Run build/port/colosseum.3dsx in Azahar for a while and report.
 
 Starts Azahar with the probe build, waits, closes it, and prints:

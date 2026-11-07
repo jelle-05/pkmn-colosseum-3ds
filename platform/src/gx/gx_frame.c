@@ -1,4 +1,4 @@
-﻿/*
+/*
  * gx_frame.c - GX initialisation, EFB copies, primitives and synchronisation.
  *
  * Frame model. On the GameCube the game draws into the embedded framebuffer

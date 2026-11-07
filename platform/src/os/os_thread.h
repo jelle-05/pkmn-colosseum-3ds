@@ -1,4 +1,4 @@
-﻿/*
+/*
  * os_thread.h - internals shared by the platform's OS thread files.
  */
 #ifndef PLATFORM_OS_THREAD_H

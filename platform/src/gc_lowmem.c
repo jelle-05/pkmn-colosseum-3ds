@@ -1,4 +1,4 @@
-﻿/*
+/*
  * gc_lowmem.c - stand-in for the first 16 KB of GameCube RAM.
  *
  * See platform/include/port/gc_mem.h. The OS globals are filled in with the

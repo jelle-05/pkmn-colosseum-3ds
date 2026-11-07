@@ -1,4 +1,4 @@
-﻿Note (2026-11-07): the port now runs in big-endian mode (docs/BIG_ENDIAN.md), the conversions described here are switched off. This stays as the of the little-endian approach and of the analysis tools.
+Note (2026-11-07): the port now runs in big-endian mode (docs/BIG_ENDIAN.md), the conversions described here are switched off. This stays as the of the little-endian approach and of the analysis tools.
 
 Data endianness
 ===============

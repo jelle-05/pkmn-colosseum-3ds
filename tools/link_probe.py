@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Link everything into a .3dsx, with stubs for what is still missing.
 
 Takes the missing-symbol list from tools/link_check.py and writes

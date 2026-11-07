@@ -1,4 +1,4 @@
-﻿/*
+/*
  * vi.c - the video interface (VI).
  *
  * On the GameCube, VI scans an XFB out to the TV and raises an interrupt at

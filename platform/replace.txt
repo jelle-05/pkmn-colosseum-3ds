@@ -11,3 +11,8 @@ fn_80029FAC
 fn_8002A0B8
 fn_8002A1C4
 fn_8002A2CC
+
+# gs_log.cpp: the game's log is a ring buffer in memory that only debug
+# menus show. The port writes each line to its own log on the SD card
+# instead (game_patch/gs_log_write.c).
+GSlogWrite

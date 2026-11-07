@@ -1,4 +1,4 @@
-﻿/*
+/*
  * pad.c - GameCube controller input from the 3DS buttons.
  *
  * Port 1 is the 3DS; ports 2-4 report no controller. Mapping:

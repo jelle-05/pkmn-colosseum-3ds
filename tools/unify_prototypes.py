@@ -1065,6 +1065,21 @@ def _bitfield_runs(text):
     return out
 
 
+GC_POINTER_CHECK = re.compile(
+    r"\(\s*u32\s*\)\s*(?P<e>[A-Za-z_][\w\->\.\[\]]*)\s*(?P<op><=|<)\s*0x80000000[uU]?\b")
+
+
+def gc_pointer_checks(text, stats):
+    """`(u32)p <= 0x80000000` tests a pointer for validity the GameCube way:
+    every valid pointer is a cached address above 0x80000000 (fsys's cache
+    allocator walks its free list like that). In the port valid pointers are
+    low addresses, so the test becomes the null test it stands for."""
+    def sub(m):
+        stats["gc_pointer_checks"] = stats.get("gc_pointer_checks", 0) + 1
+        return f"((u32)({m.group('e')}) == 0u)"
+    return GC_POINTER_CHECK.sub(sub, text)
+
+
 def redirect_fixed_addresses(text, stats):
     """Rewrite fixed GameCube addresses inside function bodies; see
     platform/include/port/gc_mem.h. Data initializers are left alone: there
@@ -1160,6 +1175,7 @@ def main():
         pre = rewrite_ppc_varargs(strip_asm_functions(strip_extern_c(text), u, stats), u, stats)
         new = rewrite_unit(u, pre, defs, stats)
         new = redirect_fixed_addresses(new, stats)
+        new = gc_pointer_checks(new, stats)
         if not compile_check.BIG_ENDIAN:
             # Little-endian build only: in big-endian mode data and
             # bitfields already have the GameCube layout.
@@ -1203,6 +1219,7 @@ def main():
     print(f"big-endian data objects retyped (platform/data_types.txt): {stats['data_retyped']}"
           f" ({stats.get('pointer_fields_split', 0)} layout fields split a pointer word, left alone)")
     print(f"bitfield runs given MWCC bit order: {stats.get('bitfield_runs', 0)}")
+    print(f"GameCube pointer-range checks turned into null checks: {stats.get('gc_pointer_checks', 0)}")
     missing = REPLACED - stats["replaced"]
     print(f"functions replaced (platform/replace.txt): {len(stats['replaced'])}"
           + (f"; listed but not found: {', '.join(sorted(missing))}" if missing else ""))

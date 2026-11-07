@@ -1,4 +1,4 @@
-﻿Boot progress
+Boot progress
 =============
 
 How far the probe build gets in Azahar, step by step. Each step lists the
@@ -83,7 +83,38 @@ converting:
                                idle function held it at the lowest priority
                                while the main thread spun in OSYieldThread);
                                OSYieldThread lets go of it
-    DSPInit                    the audio DSP, for MusyX: next
+    DSPInit                    audio/dsp.c: a silent DSP that answers MusyX's
+                               task and command lists; audio/ai.c: the AI DMA
+                               as a 5 ms clock, so the synth keeps time
+    (3 s per frame)            the interrupt lock holder raises itself above
+                               the game threads, as a thread with interrupts
+                               off is not preempted on the GameCube
+    HandleReverb               MusyX's reverb kernels (assembly): empty until
+                               there is sound
+    _msgctrlMakeDigit__FPUslUll  C units with #pragma cplusplus on get MWCC's
+                               mangled names
+    CARDInit                   card/card.c: no card in either slot
+    pokemonOboeWaza, bad read  two units' private inline_fn shared one copy;
+                               such helpers are now local to their unit
+    floorDataBiosGetFloorKind  game_c/floor_data.c: the floor accessors, which
+                               the decomp has only as assembly
+    seqStartPlay, bad read     the song's data was never loaded: fsys's ARAM
+                               cache allocator treated every pointer below
+                               0x80000000 as invalid; such checks are now null
+                               checks. ARAM DMA completes from the interrupt
+                               thread, after the request returns
+    DLInsert                   SDK heap helper reused (platform/reuse.txt)
+    GXInitLightDistAttn        SDK light initialisers reused
+    cms_CallStdTrampoline      game_asm/cms_trampoline.c: the script VM's
+                               native call
+    (runs)                     no stub, no fault: 60 frames a second, the
+                               floor manager running the first scene's
+                               scripts. Nothing is drawn yet; the next step is
+                               the renderer
+
+The game's own log (GSlogWrite) now goes to the port log as well, which
+says what it is doing: it reports "GSflagClear: Initialization has not
+finished" three times early on, and the two movies it cannot open.
 
 The heap failure on the way showed the data problem predicted in the
 roadmap: the decomp stores many objects as big-endian u8 arrays (about

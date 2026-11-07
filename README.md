@@ -1,7 +1,7 @@
 pkmn-colosseum-3ds
 ==================
 
-A native Nintendo 3DS port of Pokémon Colosseum, built on the
+A native Nintendo 3DS port of PokÃ©mon Colosseum, built on the
 [pkmn-colosseum](https://github.com/dougchansan/pkmn-colosseum) decompilation.
 The `decomp/` submodule points to [my fork](https://github.com/jelle-05/pkmn-colosseum)
 of it.
@@ -26,8 +26,9 @@ Status
   alarms, ARAM, DVD, REL modules, input and a first GX/VI layer are in. The
   game runs in the ARM11's big-endian data mode, so its data and the files
   on the disc are used as they are (see [docs/BIG_ENDIAN.md](docs/BIG_ENDIAN.md)).
-  The boot loads the archive index, links its first modules and stops at
-  the audio DSP. Nothing is drawn yet.
+  The boot gets through all of the game's initialisation and runs the first
+  scene at 60 frames a second, with silent audio and no memory card.
+  Nothing is drawn yet: the GX renderer is the next step.
   See [docs/BOOT_PROGRESS.md](docs/BOOT_PROGRESS.md). The full work list is
   [docs/PLATFORM_TODO.txt](docs/PLATFORM_TODO.txt).
 
@@ -125,5 +126,5 @@ License
 The code in this repository is MIT licensed, see `LICENSE`. The decompilation in
 `decomp/` keeps its own MIT license and copyright notices.
 
-Pokémon Colosseum is © 2003–2004 Pokémon / Nintendo / Creatures / GAME FREAK /
+PokÃ©mon Colosseum is Â© 2003â€“2004 PokÃ©mon / Nintendo / Creatures / GAME FREAK /
 Genius Sonority. This project is not affiliated with or endorsed by any of them.

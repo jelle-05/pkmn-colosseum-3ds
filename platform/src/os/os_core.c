@@ -1,4 +1,4 @@
-﻿/*
+/*
  * os_core.c - the hardware-bound core of the Dolphin OS library.
  *
  * Portable SDK code (arena, heap allocator) is compiled from the decomp, see

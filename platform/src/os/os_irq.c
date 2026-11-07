@@ -1,4 +1,4 @@
-﻿/*
+/*
  * os_irq.c - interrupts: the interrupt lock and the interrupt thread.
  *
  * On the GameCube, OSDisableInterrupts makes a section atomic: nothing

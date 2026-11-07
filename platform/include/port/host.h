@@ -1,4 +1,4 @@
-﻿/*
+/*
  * host.h - what the big-endian side may call on the little-endian host.
  *
  * The game and the platform layer run in the ARM11's big-endian data mode

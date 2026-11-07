@@ -1,4 +1,4 @@
-﻿/*
+/*
  * os_thread.c - Dolphin OS threads on 3DS threads.
  *
  * Every OSThread becomes a 3DS thread on the application core, at a priority

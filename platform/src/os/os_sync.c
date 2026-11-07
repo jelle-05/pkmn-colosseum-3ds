@@ -1,4 +1,4 @@
-﻿/*
+/*
  * os_sync.c - message queues, mutexes, condition variables and alarms.
  *
  * These follow the Dolphin SDK's own logic on top of the sleep queues and

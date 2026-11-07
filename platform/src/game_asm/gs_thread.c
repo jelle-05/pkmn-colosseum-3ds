@@ -1,4 +1,4 @@
-﻿/*
+/*
  * gs_thread.c - the GSthread switch primitives in C, on ARM coroutines.
  *
  * The decomp keeps these as the developers' assembly
