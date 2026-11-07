@@ -49,7 +49,6 @@ void __port_wakeup(OSThreadQueue* q);
 void __port_thread_dump(void);
 
 /* Interrupt emulation (os_irq.c). */
-extern host_rlock __port_irq_lock;
 extern PortThread* volatile __port_irq_owner;   /* for the heartbeat */
 extern void* volatile __port_irq_taken_at;
 void __port_irq_post(long long when, void (*fn)(void*, long), void* arg, long value);

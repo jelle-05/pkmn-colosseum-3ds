@@ -1235,6 +1235,15 @@ def mwcc_cxx_names(decomp, unit_name):
     return {k: v[0] for k, v in plain.items() if len(v) == 1}
 
 
+def cplusplus_pragma(decomp, u):
+    """Does this C unit compile parts of itself as C++ under MWCC?"""
+    try:
+        text = (decomp / u["source"]).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return re.search(r"^\s*#\s*pragma\s+cplusplus\s+on\b", text, re.M) is not None
+
+
 def mwcc_symbols(decomp, unit_name):
     """All symbol names (defined and undefined) in the decomp's MWCC object."""
     objdiff = json.loads((decomp / "objdiff.json").read_text(encoding="utf-8"))["units"]
@@ -1317,7 +1326,9 @@ def compile_unified(pp, args):
             if not cxx_errs:
                 return u, True, [], promo
             errs = errs + cxx_errs
-        elif p.returncode == 0 and u["lang"] == "c++":
+        elif p.returncode == 0 and (u["lang"] == "c++" or cplusplus_pragma(decomp, u)):
+            # C++ units, and C units that switch MWCC to C++ for some
+            # functions (#pragma cplusplus on): those got mangled names.
             names = mwcc_cxx_names(decomp, u["name"])
             if names:
                 syms = obj.with_suffix(".redefine")

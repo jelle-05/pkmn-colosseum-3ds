@@ -171,6 +171,11 @@ void __port_sleep_on(OSThreadQueue* q) { sleep_on(q, __builtin_return_address(0)
    thread; reads without locking, good enough for a diagnosis. */
 void __port_thread_dump(void)
 {
+    extern volatile int __port_irq_state;
+    extern void* volatile __port_irq_handler;
+    extern volatile unsigned __port_irq_posted, __port_irq_run, __port_irq_takes;
+    __port_log("  irq thread: state %d, handler %p, posted %u, run %u; lock taken %u times",
+               __port_irq_state, __port_irq_handler, __port_irq_posted, __port_irq_run, __port_irq_takes);
     PortThread* owner = __port_irq_owner;
     __port_log("  interrupts off: %s %p (taken at %p)", owner ? "thread" : "nobody",
                owner ? owner->os_thread : 0, __port_irq_taken_at);

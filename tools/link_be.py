@@ -345,6 +345,40 @@ def make_stubs(report, syms, provided, game_objs, decomp):
     return stubs, aliases, counts, i
 
 
+def localize_private_inlines(objs):
+    """Inline functions become weak definitions (unify_prototypes.py), so
+    the linker keeps one copy for units that call them from outside. But
+    some names are unit-private helpers with different bodies in different
+    units (the decomp has several `inline_fn`): there one copy for all is
+    wrong. A weak function defined with different sizes in several objects
+    is made local in each of them, so every unit calls its own."""
+    from collections import defaultdict
+
+    def weak_defs(obj):
+        out = subprocess.run([str(NM), "-S", "--defined-only", str(obj)], capture_output=True, text=True).stdout
+        return obj, [(p[3], int(p[1], 16)) for p in (l.split() for l in out.splitlines())
+                     if len(p) == 4 and p[2] == "W"]
+    defs = defaultdict(list)
+    with ThreadPoolExecutor() as pool:
+        for obj, ws in pool.map(weak_defs, objs):
+            for name, size in ws:
+                defs[name].append((obj, size))
+    private = {n: d for n, d in defs.items() if len(d) > 1 and len({s for _, s in d}) > 1}
+    if not private:
+        return
+    with ThreadPoolExecutor() as pool:
+        users = set().union(*pool.map(undefined_syms, objs))
+    per_obj = defaultdict(list)
+    for name, d in private.items():
+        for obj, _ in d:
+            per_obj[obj].append(name)
+    for obj, names in per_obj.items():
+        run([OBJCOPY, *(f"--localize-symbol={n}" for n in names), obj], f"localizing in {obj.name}")
+    shared = sorted(n for n in private if n in users)
+    print(f"unit-private inline functions made local: {', '.join(sorted(private))}"
+          + (f" (also called from other units, now unresolved there: {', '.join(shared)})" if shared else ""))
+
+
 def make_modules(decomp, manifest, game_defined):
     """modules.c: the REL modules compiled into the image, by the module ID
     in their original .rel header, for OSLink (platform/src/os/os_link.c)."""
@@ -405,6 +439,8 @@ def main():
 
     results = json.loads((ROOT / "build" / "unified" / "compile.json").read_text(encoding="utf-8"))
     game_objs = [ROOT / "build" / "unified" / "obj" / (r["name"] + ".o") for r in results if r["ok"]]
+
+    localize_private_inlines(game_objs)
 
     with ThreadPoolExecutor() as pool:
         provided = set().union(*pool.map(defined, platform_objs))

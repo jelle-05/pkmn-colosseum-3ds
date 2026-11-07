@@ -26,13 +26,17 @@ STUB_LOG = APPDATA / "Azahar" / "sdmc" / "colosseum-port-stub.log"
 AZ_LOG = APPDATA / "Azahar" / "log" / "azahar_log.txt"
 
 
-def heartbeat_address(image, tools):
+def symbol_address(image, tools, name):
     out = subprocess.run([str(tools / "arm-none-eabi-nm.exe"), str(image)], capture_output=True, text=True).stdout
     for line in out.splitlines():
         p = line.split()
-        if len(p) == 3 and p[2] == "__port_thread_dump":
+        if len(p) == 3 and p[2] == name:
             return "0x" + p[0]
-    raise SystemExit("__port_thread_dump not in the image")
+    raise SystemExit(f"{name} not in the image")
+
+
+def heartbeat_address(image, tools, name=None):
+    return symbol_address(image, tools, name or "__port_thread_dump")
 
 
 def resolve_registers(text, elfs, tools):
@@ -84,6 +88,15 @@ def main():
     ap.add_argument("--gdb", action="store_true",
                     help="enable Azahar's gdbstub, stop at the first heartbeat "
                          "(__port_thread_dump) and print every thread's backtrace")
+    ap.add_argument("--break", dest="brk", default=None,
+                    help="with --gdb: stop at this function of the image instead of the heartbeat")
+    ap.add_argument("--show", action="append", default=[],
+                    help="with --gdb: also print these image symbols (32-bit, big-endian)")
+    ap.add_argument("--cmd", action="append", default=[],
+                    help="with --gdb: extra gdb commands at the stop")
+    ap.add_argument("--cond", default=None, help="with --gdb: condition for the stop, e.g. '$r3 < 0x1000'")
+    ap.add_argument("--skip", type=int, default=0,
+                    help="with --gdb: let this many heartbeats pass first")
     args = ap.parse_args()
 
     STUB_LOG.unlink(missing_ok=True)
@@ -107,7 +120,8 @@ def main():
                 # are reliable; they are resolved against both images.
                 cmds = ["set pagination off", "set confirm off", f"file {elf.as_posix()}",
                         "target remote localhost:24689", "break *0x0", "delete",
-                        f"tbreak *{heartbeat_address(image, tools)}", "continue",
+                        f"break *{heartbeat_address(image, tools, args.brk)}" + (f" if {args.cond}" if args.cond else ""), f"ignore $bpnum {args.skip}", "continue",
+                        *[f"x/1xw {symbol_address(image, tools, s)}" for s in args.show], *args.cmd,
                         "info threads", "thread apply all info registers pc lr sp",
                         "thread apply all x/48xw $sp", "detach"]
             else:

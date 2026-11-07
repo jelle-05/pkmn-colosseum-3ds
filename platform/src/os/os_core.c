@@ -33,6 +33,7 @@ void __port_log(const char* fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     size_t n = strlen(buf);
+    host_debug_string(buf, (unsigned)n);     /* timestamped in Azahar's log */
     if (n < sizeof(buf) - 1)
         buf[n++] = '\n';
     int fd = host_file_open("sdmc:/colosseum-port.log", "a");
