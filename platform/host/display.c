@@ -41,6 +41,8 @@ void host_frame_begin(int clear, host_u32 rgba, host_u32 z)
     if (clear)
         C3D_RenderTargetClear(top, C3D_CLEAR_ALL, rgba, z & 0xFFFFFF);
     C3D_FrameDrawOn(top);
+    extern void host_gpu_frame(void);
+    host_gpu_frame();
     frame_open = 1;
 }
 

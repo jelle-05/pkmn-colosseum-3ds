@@ -84,6 +84,14 @@ typedef void (*host_entry)(void* arg);
     X(host_frame_begin, void, (int clear, host_u32 rgba, host_u32 z))                  \
     X(host_frame_end, host_u32, (void))               /* frames presented */           \
     X(host_wait_vblank, void, (void))                                                  \
+    /* renderer (port/gpu.h): the frame's vertex buffer, textures, draws */            \
+    X(host_gpu_vertices, void*, (void))               /* GpuVertex[capacity] */        \
+    X(host_gpu_capacity, host_u32, (void))                                             \
+    X(host_gpu_tex_create, host_u32, (host_u32 width, host_u32 height)) /* RGBA8 */    \
+    X(host_gpu_tex_data, void*, (host_u32 tex))                                        \
+    X(host_gpu_tex_upload, void, (host_u32 tex))                                       \
+    X(host_gpu_tex_free, void, (host_u32 tex))                                         \
+    X(host_gpu_draw, void, (const void* draw))        /* const GpuDraw* */            \
     /* input */                                                                        \
     X(host_input_init, void, (void))                                                   \
     X(host_input_scan, host_u32, (void))              /* keys held */                  \

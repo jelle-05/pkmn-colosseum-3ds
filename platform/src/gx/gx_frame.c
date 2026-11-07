@@ -32,6 +32,8 @@ static void ensure_frame(void)
                          __gx.copy_clear_z);
         pending_clear = 0;
         frame_open = 1;
+        extern void __gx_draw_frame_start(void);
+        __gx_draw_frame_start();
     }
 }
 
@@ -117,22 +119,8 @@ void GXCopyTex(void* dest, int clear)
         pending_clear = 1;
 }
 
-/* ---- primitives ------------------------------------------------------------------ */
-
-void GXBegin(int type, int fmt, gx_u16 nverts)
-{
-    ensure_frame();
-    __gx.prim_type = (gx_u8)type;
-    __gx.prim_fmt = (gx_u8)fmt;
-    __gx.prim_count = nverts;
-    __GXFifoPtr = __gx.fifo_base;
-}
-
-void GXCallDisplayList(const void* list, gx_u32 nbytes)
-{
-    (void)list; (void)nbytes;
-    ensure_frame();
-}
+/* Primitives (GXBegin, GXCallDisplayList) are drawn in gx_draw.c. */
+void __gx_ensure_frame(void) { ensure_frame(); }
 
 /* ---- synchronisation -------------------------------------------------------------
  * The 3DS GPU work is synchronous to the frame for now, so the draw-done and

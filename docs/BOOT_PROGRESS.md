@@ -111,6 +111,10 @@ converting:
                                floor manager running the first scene's
                                scripts. Nothing is drawn yet; the next step is
                                the renderer
+    title screen               gx/gx_draw.c and host/gpu.c: the renderer
+                               (docs/RENDERER.md). The title screen shows: the
+                               desert with its ruins and the 3D logo, at about
+                               10 frames a second in Azahar
 
 The game's own log (GSlogWrite) now goes to the port log as well, which
 says what it is doing: it reports "GSflagClear: Initialization has not

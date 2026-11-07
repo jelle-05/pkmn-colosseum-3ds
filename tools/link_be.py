@@ -345,6 +345,28 @@ def make_stubs(report, syms, provided, game_objs, decomp):
     return stubs, aliases, counts, i
 
 
+def build_shaders(hsrc, le_flags):
+    """Every platform/host/NAME.v.pica, assembled with picasso and embedded
+    as NAME_shbin / NAME_shbin_size."""
+    picasso = DEVKITPRO / "tools" / "bin" / "picasso.exe"
+    objs = []
+    for src in sorted(hsrc.glob("*.v.pica")):
+        name = src.name.split(".")[0]
+        shbin = OUT / "host" / f"{name}.shbin"
+        shbin.parent.mkdir(parents=True, exist_ok=True)
+        run([picasso, "-o", shbin, src], f"assembling {src.name}")
+        asm = OUT / "host" / f"{name}_shbin.S"
+        asm.write_text(
+            "    .section .rodata\n    .balign 4\n"
+            f"    .global {name}_shbin, {name}_shbin_size\n"
+            f"{name}_shbin:\n    .incbin \"{shbin.as_posix()}\"\n{name}_shbin_end:\n    .balign 4\n"
+            f"{name}_shbin_size:\n    .word {name}_shbin_end - {name}_shbin\n", encoding="utf-8")
+        obj = asm.with_suffix(".o")
+        run([GCC, *compile_check.ARCH_LE, "-c", asm, "-o", obj], f"embedding {name}.shbin")
+        objs.append(obj)
+    return objs
+
+
 def localize_private_inlines(objs):
     """Inline functions become weak definitions (unify_prototypes.py), so
     the linker keeps one copy for units that call them from outside. But
@@ -436,6 +458,7 @@ def main():
     hsrc = ROOT / "platform" / "host"
     host_objs = compile_all(sorted(hsrc.rglob("*.c")) + sorted(hsrc.rglob("*.S")),
                             OUT / "host", hsrc, le_flags)
+    host_objs += build_shaders(hsrc, le_flags)
 
     results = json.loads((ROOT / "build" / "unified" / "compile.json").read_text(encoding="utf-8"))
     game_objs = [ROOT / "build" / "unified" / "obj" / (r["name"] + ".o") for r in results if r["ok"]]

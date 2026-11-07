@@ -16,3 +16,7 @@ fn_8002A2CC
 # menus show. The port writes each line to its own log on the SD card
 # instead (game_patch/gs_log_write.c).
 GSlogWrite
+
+# sdk_range_800BA7C0.c: keeps the image address in a 21-bit field, too
+# small for the port's heap (game_patch/gx_texobj.c).
+GXInitTexObj

@@ -1,0 +1,35 @@
+; vshader.v.pica - the renderer's vertex shader.
+;
+; The GX layer transforms vertices on the CPU (platform/src/gx/gx_draw.c):
+; positions arrive in clip space for a landscape screen. This shader turns
+; that into the top screen's rotated framebuffer (the "tilt" in tilt), and
+; scales the colour from bytes to 0..1.
+
+.fvec tilt[4]
+
+.constf consts(0.00392156862, 0.0, 0.0, 0.0)
+.alias  inv255 consts.xxxx
+
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+
+.alias inpos v0
+.alias inclr v1
+.alias intc0 v2
+.alias intc1 v3
+.alias intc2 v4
+
+.proc main
+    dp4 outpos.x, tilt[0], inpos
+    dp4 outpos.y, tilt[1], inpos
+    dp4 outpos.z, tilt[2], inpos
+    dp4 outpos.w, tilt[3], inpos
+    mul outclr, inv255, inclr
+    mov outtc0, intc0
+    mov outtc1, intc1
+    mov outtc2, intc2
+    end
+.end

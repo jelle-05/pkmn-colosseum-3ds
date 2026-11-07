@@ -37,25 +37,34 @@ static inline void* __GC_ADDR(unsigned long addr)
     return 0;
 }
 
-/* GX FIFO writes, owned by platform/gx. The buffer is native-endian because
- * only our own GX layer reads it. */
+/* GX FIFO writes, owned by platform/gx. The image runs big-endian, so the
+ * buffer has the GameCube's byte order, as display lists do. GXBegin sets
+ * __GXFifoEnd to where the primitive's vertex data ends; the write that
+ * reaches it hands the primitive to the renderer (GXEnd is empty). */
 extern unsigned char* __GXFifoPtr;
+extern unsigned char* __GXFifoEnd;
+extern void __GXFifoDone(void);
 
-static inline void __GXFifoU8(unsigned char v) { *__GXFifoPtr++ = v; }
+#define __GXFIFO_CHECK() do { if (__GXFifoPtr == __GXFifoEnd) __GXFifoDone(); } while (0)
+
+static inline void __GXFifoU8(unsigned char v) { *__GXFifoPtr++ = v; __GXFIFO_CHECK(); }
 static inline void __GXFifoU16(unsigned short v)
 {
     __builtin_memcpy(__GXFifoPtr, &v, 2);
     __GXFifoPtr += 2;
+    __GXFIFO_CHECK();
 }
 static inline void __GXFifoU32(unsigned long v)
 {
     __builtin_memcpy(__GXFifoPtr, &v, 4);
     __GXFifoPtr += 4;
+    __GXFIFO_CHECK();
 }
 static inline void __GXFifoF32(float v)
 {
     __builtin_memcpy(__GXFifoPtr, &v, 4);
     __GXFifoPtr += 4;
+    __GXFIFO_CHECK();
 }
 
 #endif /* PORT_GC_MEM_H */
