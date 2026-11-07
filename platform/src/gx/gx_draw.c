@@ -1321,6 +1321,24 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
                    (int)(__gx.projection[4] * 1000), (int)(__gx.projection[5] * 1000), (int)(__gx.projection[6] * 1000),
                    (int)__gx.viewport[0], (int)__gx.viewport[1], (int)__gx.viewport[2], (int)__gx.viewport[3]);
     }
+    /* Bring-up aid: the translucent untextured draws of frame 1000, with
+     * what they became, and how many draws came before and after. */
+    static unsigned f1000_draws;
+    if (__port_frame_number_peek() == 1000) {
+        f1000_draws++;
+        if (written && !d.unit[0].tex && out[0].color[3] < 255) {
+            const GpuStage* g = &d.stage[0];
+            __port_log("f1000 draw %u (vertex %u): %u verts proj %d color %02x%02x%02x%02x | blend %d eq %d %d/%d"
+                       " | mask %02x depth %d/%d | stage0 rgb %d %d %d f%d a %d %d %d f%d | stages %d",
+                       f1000_draws, vused, written, (int)__gx.projection[0], out[0].color[0], out[0].color[1],
+                       out[0].color[2], out[0].color[3], d.blend, d.blend_eq, d.blend_src, d.blend_dst, d.write_mask,
+                       d.depth_test, d.depth_func, g->src_rgb[0], g->src_rgb[1], g->src_rgb[2], g->func_rgb,
+                       g->src_a[0], g->src_a[1], g->src_a[2], g->func_a, d.num_stages);
+        }
+    } else if (f1000_draws && __port_frame_number_peek() == 1001) {
+        __port_log("f1000: %u draws in all", f1000_draws);
+        f1000_draws = 0;
+    }
     /* Bring-up aid: the first orthographic (2D) draws, with their extent. */
     static int ortho_logged;
     if (__gx.projection[0] == (float)GXENUM_ORTHOGRAPHIC && ortho_logged < 40 && written && d.unit[0].tex) {

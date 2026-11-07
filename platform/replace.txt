@@ -27,3 +27,8 @@ GSmtx44Perspective
 GSmtx44Ortho
 gfxSetPerspective
 gfxSetOrtho
+
+# gs_math_quat.c, effect/fade_effect.c: the same, for a quaternion helper and
+# a fade hook (game_patch/gs_float_passthrough.c).
+fn_800E0718
+fadeEffectHookFunction_carde

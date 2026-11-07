@@ -132,89 +132,22 @@ Floats passed in registers
 
 Some decomp functions match MWCC's code by relying on float arguments
 staying in the PowerPC's f1-f8 from one call to the next, without passing
-them. On ARM those values are lost. A scan of the decomp finds 24 calls
-without arguments to functions that take floats; the projection setters
-are replaced, the rest are listed here and will show up as wrong values
-when the game reaches them:
+them. On ARM those values are lost. A scan of the decomp found 24 places
+that call a function taking floats without arguments; most of them are
+K&R declarations inside a function (`extern int fadeSet();`) whose calls do
+pass their arguments, and whose float passing unify_prototypes.py fixes.
+The real pass-throughs, all replaced (platform/replace.txt):
 
-    GSmtx44Ortho, GSmtx44Perspective     replaced
-    gfxSetPerspective, gfxSetOrtho       replaced (record path too)
-    __GXInitGX                           not used (the platform's GXInit)
-    _preReliveDisplayHokoraParticleThreadFunc__Fv  gsParticleSetVecB, waitTime__Ff
-    dbgMenuSendAllMail                   mailMainSendAllMail
-    effectPlayWaza, fieldStartEncount, fightActionFlowKaisiPre,
-    fightStartEncount                    fadeSet
-    fadeEffectHookFunction_carde         fn_801C5F6C
-    fightOutPokemonHokakuEffect          fn_801DA2C4
-    fightTrainerAiWazaValueMigawari      fightTrainerAiGetHpPercent
-    floorElevatorSetupCharacters         GSmodelGetFrameCount, peopleStartTurn,
-                                         std059_characterSetPosition
-    fn_800E0718                          C_QUATRotAxisRad
-    fn_80118DE0                          psSetGeneratorAngleRadiusScale
-    pcMenuDrawPurifiedCount              gfxVtxTexCoord
-    reliveCeremonyAll                    pokemonSetDp
-    std232_characterApproachPlayer       peopleTurnToPoint
+    GSmtx44Perspective, GSmtx44Ortho     gs_math_mtx44.c
+    gfxSetPerspective, gfxSetOrtho       gs_gfx_range_800D9AF0.c (record path too)
+    fn_800E0718                          gs_math_quat.c (C_QUATRotAxisRad)
+    fadeEffectHookFunction_carde         effect/fade_effect.c (fn_801C5F6C)
 
-The game's own log (GSlogWrite) now goes to the port log as well, which
-says what it is doing: it reports "GSflagClear: Initialization has not
-finished" three times early on, and the two movies it cannot open.
+Left as they are: dbgMenuSendAllMail (a debug menu entry) and __GXInitGX
+(the platform has its own GXInit). GXInitTexObjLOD is still called
+unprototyped with floats from gs_gfx_backfb.c; the renderer ignores the
+LOD values it sets.
 
-The heap failure on the way showed the data problem predicted in the
-roadmap: the decomp stores many objects as big-endian u8 arrays (about
-500 KB in 974 arrays). A 640-pixel-wide render mode read 0x8002 as its
-width, so the framebuffer size became 0xE01D0020 and the following heap
-landed outside memory. platform/data_types.txt now gives such objects a
-field layout and the tool byte-swaps their initializers. The general fix,
-deriving layouts from the access widths in the original code, is a work
-package of its own.
-
-
-Running it
-----------
-
-The DVD layer reads the user's own disc image from
-`sdmc:/3ds/colosseum/GC6E01.iso`. For Azahar that is
-`%APPDATA%\Azahar\sdmc\3ds\colosseum\GC6E01.iso`. Then:
-
-    python tools/unify_prototypes.py --compile
-    python tools/link_check.py
-    python tools/link_be.py
-    python tools/run_azahar.py           # or --gdb for threads and stacks
-
-
-Platform pieces so far
-----------------------
-
-    platform/src/os/os_core.c     arena (19 MB, as on the GameCube),
-                                  OSGetTime/OSGetTick in GameCube ticks from
-                                  2000-01-01, caches, OSReport, error and
-                                  reset handlers, the port log
-    platform/src/os/os_irq.c      interrupts: a recursive lock, and a thread
-                                  that delivers retrace, alarms and DVD
-                                  completions at their due time
-    platform/src/os/os_thread.c   OS threads on 3DS threads (priority 0x19 +
-                                  GameCube priority), sleep queues, heartbeat
-    platform/src/os/os_sync.c     message queues, mutexes, conditions, alarms
-    platform/src/thread/          ARM context switch for the game's coroutines
-    platform/src/game_patch/      game functions replaced (platform/replace.txt)
-    platform/src/thp/             movie player placeholder (movies are skipped)
-    platform/src/os/ar.c          ARAM as a 16 MB buffer, DMA and ARQ as memcpy
-    platform/src/os/lc.c          the locked cache as a 16 KB buffer
-    platform/src/audio/ai.c       placeholder audio interface
-    platform/src/dvd/dvd.c        disc image, FST, sync and async reads
-    platform/src/gc_lowmem.c      GameCube low memory and its boot values
-    platform/src/game_asm/        C versions of the game's own assembly
-    platform/src/gx/              GX state (gx_state.c), init, copies, frame
-                                  model and sync (gx_frame.c); nothing is drawn
-                                  yet
-    platform/src/video/           citro3d setup and frames (display.c), VI and
-                                  retrace callbacks (vi.c)
-    platform/src/mtx/mtx.c        matrix and vector math the SDK does in asm
-    platform/src/pad/             controller (pad.c) and serial ports (si.c)
-    platform/reuse.txt            SDK units compiled from the decomp as they are
-    platform/data_types.txt       field layouts for big-endian data objects
-
-Still in the game_asm work list (removed from their units by
-unify_prototypes.py): the script engine's cms_CallStdTrampoline, MusyX
-reverb (HandleReverb, DoCrossTalk) and HSD_SaveContext. The game's thread
-system is in game_asm/gs_thread.c.
+The dark full-screen quad drawn before the memory card message is not
+missing: the game draws it with colour writes off, to reset the depth
+buffer before the 2D windows.
