@@ -6,8 +6,10 @@ A native Nintendo 3DS port of PokÃ©mon Colosseum, built on the
 The `decomp/` submodule points to [my fork](https://github.com/jelle-05/pkmn-colosseum)
 of it.
 
-This is an early work in progress. Nothing runs yet. The plan and the current
-state are in the decomp's [docs/3DS_PORT_ROADMAP.md](decomp/docs/3DS_PORT_ROADMAP.md).
+This is an early work in progress: the game boots to its main menu, but you
+cannot play it yet. Where it stands and what comes next is in
+[docs/NEXT.md](docs/NEXT.md); the overall plan is in the decomp's
+[docs/3DS_PORT_ROADMAP.md](decomp/docs/3DS_PORT_ROADMAP.md).
 
 This repository contains no game data, and never will. You need your own copy of
 the game (NTSC-U, GC6E01).
@@ -29,7 +31,9 @@ Status
   The game boots through the title screen and the memory card question to
   its main menu, drawn by the port's renderer (see
   [docs/RENDERER.md](docs/RENDERER.md)), with silent audio and no memory
-  card. It is slow so far: about 15 frames a second in Azahar.
+  card. It is slow so far: 12-20 frames a second in Azahar, and 5 on a
+  New 3DS before the console's fast mode was turned on (see
+  [docs/HARDWARE.md](docs/HARDWARE.md)).
   See [docs/BOOT_PROGRESS.md](docs/BOOT_PROGRESS.md). The full work list is
   [docs/PLATFORM_TODO.txt](docs/PLATFORM_TODO.txt).
 

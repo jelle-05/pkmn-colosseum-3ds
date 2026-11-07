@@ -36,14 +36,18 @@ The host side (platform/host/gpu.c, vshader.v.pica) only rotates the clip
 coordinates into the top screen's portrait framebuffer, and applies the
 draw state with citro3d.
 
-Speed. Draws with the same state that follow each other are sent as one
+Speed. Every GX vertex is transformed once and stored in the frame's
+vertex buffer; quads, strips and fans become 16-bit indices into it
+(C3D_DrawElements). Draws with the same state that follow each other are sent as one
 (about 45 instead of 520 per frame on the title screen); the host only sets
 state that changed and flushes the vertex buffer once per frame; the
 translated draw state is reused until a GX setter changes it. The platform
 is built with -O2; the game stays at -O1 (see compile_check.py). On the
-title screen in Azahar that gives 15 frames a second, from 10: per frame
-about 19 ms of vertex work and 30 ms of game code, and the rest waiting for
-the next retrace. platform/src/os/prof.c logs that breakdown every 120
+title screen in Azahar that gives 12-15 frames a second, from 10 (the main
+menu runs at 19.5): per frame about 18 ms of vertex work and 30 ms of game
+code, and about 16 ms in the retrace wait, during which the game's other
+threads run. On a New 3DS the vertex work took 95 ms a frame before the
+console's fast mode was turned on (docs/HARDWARE.md). platform/src/os/prof.c logs that breakdown every 120
 frames.
 
 Not done yet: lines and points, EFB copies to textures (GXCopyTex),

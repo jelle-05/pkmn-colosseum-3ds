@@ -125,6 +125,10 @@ converting:
                                Slot A", YES on "Continue without saving?":
                                the main menu (Battle Mode, Story Mode, Options)
                                at 15 frames a second in Azahar
+    real New 3DS               docs/HARDWARE.md: boots to the memory card check
+                               at 5 frames a second; quitting crashed in
+                               hidScanInput (fixed, not yet retested); fast
+                               mode and VFP RunFast turned on
 
 
 Floats passed in registers
