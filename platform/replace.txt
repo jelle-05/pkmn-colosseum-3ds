@@ -20,3 +20,10 @@ GSlogWrite
 # sdk_range_800BA7C0.c: keeps the image address in a 21-bit field, too
 # small for the port's heap (game_patch/gx_texobj.c).
 GXInitTexObj
+
+# gs_math_mtx44.c, gs_gfx_range_800D9AF0.c: float arguments passed on in
+# registers without being named (game_patch/gs_gfx_projection.c).
+GSmtx44Perspective
+GSmtx44Ortho
+gfxSetPerspective
+gfxSetOrtho

@@ -42,6 +42,13 @@ BIG_ENDIAN = True
 ARCH_LE = ["-march=armv6k", "-mtune=mpcore", "-mfloat-abi=hard", "-mtp=soft"]
 ARCH = ARCH_LE + (["-mbig-endian"] if BIG_ENDIAN else [])
 
+# Optimisation. The game stays at -O1: at -O2 it hangs a few frames in,
+# most likely in a busy-wait on a variable that is not volatile, which -O2
+# turns into an endless loop (MWCC built many units at level 0). The
+# platform layer, which is ours, uses OPT_PLATFORM.
+OPT = "-O1"
+OPT_PLATFORM = "-O2"
+
 # Language semantics that must match MWCC's C89-era behaviour, for every
 # compile of decomp code:
 #   -fgnu89-inline       a plain `inline` definition still emits an external

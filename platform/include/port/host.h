@@ -84,6 +84,7 @@ typedef void (*host_entry)(void* arg);
     X(host_frame_begin, void, (int clear, host_u32 rgba, host_u32 z))                  \
     X(host_frame_end, host_u32, (void))               /* frames presented */           \
     X(host_wait_vblank, void, (void))                                                  \
+    X(host_dump_frame, void, (const char* path))      /* BMP of the last frame */      \
     /* renderer (port/gpu.h): the frame's vertex buffer, textures, draws */            \
     X(host_gpu_vertices, void*, (void))               /* GpuVertex[capacity] */        \
     X(host_gpu_capacity, host_u32, (void))                                             \

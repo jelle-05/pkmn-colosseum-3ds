@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "os_thread.h"
+#include "port/prof.h"
 
 extern long long OSGetTime(void);
 extern void __port_log(const char* fmt, ...);
@@ -196,12 +197,17 @@ void __port_irq_take(PortThread* t, void* where)
     int raise = t->handle && t->prio3ds != PRIO_IRQ;
     if (raise)
         host_thread_set_priority(t->handle, PRIO_IRQ);
+    long long t_wait = 0;
     while (!__sync_bool_compare_and_swap(&__port_irq_owner, (PortThread*)0, t)) {
+        if (!t_wait)
+            t_wait = __prof_now();
         __sync_fetch_and_add(&lock_waiters, 1);
         if (__port_irq_owner)
             host_event_wait_us(&lock_free, 1000);   /* the timeout covers a lost signal */
         __sync_fetch_and_sub(&lock_waiters, 1);
     }
+    if (t_wait)
+        PROF_END(PROF_IRQ_WAIT, t_wait);
     t->boosted = raise;
     t->irq_off = 1;
     __port_irq_taken_at = where;

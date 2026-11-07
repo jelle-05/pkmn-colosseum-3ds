@@ -90,10 +90,14 @@ unsigned long OSGetConsoleSimulatedMemSize(void) { return *(unsigned long*)__GC_
  * Our DMA is memcpy and our GPU layer reads from the CPU's view, so these
  * have nothing to do. The GPU flush the 3DS does need lives in platform/gx. */
 
-void DCFlushRange(void* addr, unsigned long n) { (void)addr; (void)n; }
-void DCFlushRangeNoSync(void* addr, unsigned long n) { (void)addr; (void)n; }
-void DCStoreRange(void* addr, unsigned long n) { (void)addr; (void)n; }
-void DCStoreRangeNoSync(void* addr, unsigned long n) { (void)addr; (void)n; }
+/* A flush means the CPU wrote data the GPU will read: textures decoded
+ * from there are decoded again (gx/gx_draw.c). */
+extern void __gx_tex_written(unsigned addr, unsigned len);
+
+void DCFlushRange(void* addr, unsigned long n) { __gx_tex_written((unsigned)addr, (unsigned)n); }
+void DCFlushRangeNoSync(void* addr, unsigned long n) { __gx_tex_written((unsigned)addr, (unsigned)n); }
+void DCStoreRange(void* addr, unsigned long n) { __gx_tex_written((unsigned)addr, (unsigned)n); }
+void DCStoreRangeNoSync(void* addr, unsigned long n) { __gx_tex_written((unsigned)addr, (unsigned)n); }
 void DCInvalidateRange(void* addr, unsigned long n) { (void)addr; (void)n; }
 void ICInvalidateRange(void* addr, unsigned long n) { (void)addr; (void)n; }
 void PPCSync(void) {}

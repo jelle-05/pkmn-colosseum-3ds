@@ -446,7 +446,7 @@ def main():
         libc_defs |= {p[2] for p in (l.split() for l in run([NM, "--defined-only", lib], "nm")
                                      .splitlines()) if len(p) == 3 and p[1] in "TW"}
 
-    be_flags = [*compile_check.ARCH, "-O1", "-std=gnu99", "-fno-common", "-fdata-sections",
+    be_flags = [*compile_check.ARCH, compile_check.OPT_PLATFORM, "-std=gnu99", "-fno-common", "-fdata-sections",
                 "-ffunction-sections", "-fno-math-errno", "-D__3DS__", "-DPORT_BIG_ENDIAN=1",
                 "-I", ROOT / "platform" / "include"]
     le_flags = [*compile_check.ARCH_LE, "-O2", "-std=gnu99", "-D__3DS__",

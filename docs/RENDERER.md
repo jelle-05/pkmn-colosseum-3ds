@@ -26,14 +26,36 @@ terms (platform/src/gx/gx_state.c) and draws in platform/src/gx/gx_draw.c:
   - Alpha compare, blending, depth test and write masks are translated
     directly.
 
+  - With clipping off (GX_CLIP_DISABLE) depth is kept just inside the
+    range: 2D overlays sit exactly at the far end, which the PICA would
+    clip.
+  - Textures written again by the game (the font's glyph cache) are
+    decoded again: DCFlushRange marks cached textures in the flushed range.
+
 The host side (platform/host/gpu.c, vshader.v.pica) only rotates the clip
 coordinates into the top screen's portrait framebuffer, and applies the
 draw state with citro3d.
 
+Speed. Draws with the same state that follow each other are sent as one
+(about 45 instead of 520 per frame on the title screen); the host only sets
+state that changed and flushes the vertex buffer once per frame; the
+translated draw state is reused until a GX setter changes it. The platform
+is built with -O2; the game stays at -O1 (see compile_check.py). On the
+title screen in Azahar that gives 15 frames a second, from 10: per frame
+about 19 ms of vertex work and 30 ms of game code, and the rest waiting for
+the next retrace. platform/src/os/prof.c logs that breakdown every 120
+frames.
+
 Not done yet: lines and points, EFB copies to textures (GXCopyTex),
 indirect texturing, swap tables, fog, TEV colour registers written by one
-stage and read by a later one, culling, texture updates after the first
-use, and speed (about 10 frames a second in Azahar on the title screen).
+stage and read by a later one, culling.
 
-tools/azahar_shot.ps1 runs the build and saves screenshots of the Azahar
-window, for checking the picture without watching.
+
+Testing without a screen
+------------------------
+
+`run_azahar.py --script "650 press START 8;1000 shot"` writes a script
+for the port (platform/src/os/script.c): buttons held at given frames, and
+screenshots the port saves itself from its render target, as
+build/shots/colosseum-shot-NNNNN.png. Azahar runs minimised and does not
+take the desktop's focus.

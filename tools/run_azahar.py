@@ -92,6 +92,9 @@ def main():
                     help="with --gdb: stop at this function of the image instead of the heartbeat")
     ap.add_argument("--show", action="append", default=[],
                     help="with --gdb: also print these image symbols (32-bit, big-endian)")
+    ap.add_argument("--script", default=None,
+                    help="events for the port's script (platform/src/os/script.c), separated by ';', "
+                         "e.g. '300 shot;420 press START 10'; screenshots go to build/shots")
     ap.add_argument("--cmd", action="append", default=[],
                     help="with --gdb: extra gdb commands at the stop")
     ap.add_argument("--cond", default=None, help="with --gdb: condition for the stop, e.g. '$r3 < 0x1000'")
@@ -100,13 +103,25 @@ def main():
     args = ap.parse_args()
 
     STUB_LOG.unlink(missing_ok=True)
+    sdmc = APPDATA / "Azahar" / "sdmc"
+    script = sdmc / "colosseum-port-script.txt"
+    for old in sdmc.glob("colosseum-shot-*.bmp"):
+        old.unlink()
+    if args.script:
+        script.write_text("\n".join(s.strip() for s in args.script.split(";")) + "\n", encoding="utf-8")
+    elif script.exists():
+        script.unlink()
     started = time.time()
     config = APPDATA / "Azahar" / "config" / "qt-config.ini"
     saved = config.read_text(encoding="utf-8") if args.gdb else None
     if args.gdb:
         config.write_text(saved.replace("use_gdbstub=false", "use_gdbstub=true")
                           .replace("use_gdbstub\\default=true", "use_gdbstub\\default=false"), encoding="utf-8")
-    proc = subprocess.Popen([args.azahar, str(args.rom.resolve())])
+    # Minimised and not activated: the run does not take the desktop's focus.
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = 7                      # SW_SHOWMINNOACTIVE
+    proc = subprocess.Popen([args.azahar, str(args.rom.resolve())], startupinfo=si)
     try:
         if args.gdb:
             time.sleep(3)
@@ -144,6 +159,15 @@ def main():
         if saved is not None:
             config.write_text(saved, encoding="utf-8")
 
+    shots = sorted(sdmc.glob("colosseum-shot-*.bmp"))
+    if shots:
+        out = ROOT / "build" / "shots"
+        out.mkdir(parents=True, exist_ok=True)
+        ps = "; ".join(
+            f"$i = [System.Drawing.Image]::FromFile('{s}'); $i.Save('{out / (s.stem + '.png')}', "
+            "[System.Drawing.Imaging.ImageFormat]::Png); $i.Dispose()" for s in shots)
+        subprocess.run(["powershell", "-NoProfile", "-Command", "Add-Type -AssemblyName System.Drawing; " + ps])
+        print("screenshots: " + ", ".join(str(out / (s.stem + ".png")) for s in shots))
     if not AZ_LOG.exists() or AZ_LOG.stat().st_mtime < started:
         print("Azahar did not write a new log")
     log = AZ_LOG.read_text(encoding="utf-8", errors="replace").splitlines() if AZ_LOG.exists() else []

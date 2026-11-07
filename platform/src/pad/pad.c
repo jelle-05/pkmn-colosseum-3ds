@@ -55,7 +55,8 @@ static s8 scale_stick(int v)
 
 void __port_pad_sample(void)
 {
-    u32 held = host_input_scan();
+    extern unsigned __port_script_keys(void);
+    u32 held = host_input_scan() | __port_script_keys();
     u32 circle = host_input_circle(), cstick = host_input_cstick();
     struct { s16 dx, dy; } cp = { (s16)(circle & 0xFFFF), (s16)(circle >> 16) },
                            cs = { (s16)(cstick & 0xFFFF), (s16)(cstick >> 16) };

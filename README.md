@@ -26,9 +26,10 @@ Status
   alarms, ARAM, DVD, REL modules, input and a first GX/VI layer are in. The
   game runs in the ARM11's big-endian data mode, so its data and the files
   on the disc are used as they are (see [docs/BIG_ENDIAN.md](docs/BIG_ENDIAN.md)).
-  The game boots to its title screen and draws it (see
+  The game boots through the title screen and the memory card question to
+  its main menu, drawn by the port's renderer (see
   [docs/RENDERER.md](docs/RENDERER.md)), with silent audio and no memory
-  card. It is slow so far: about 10 frames a second in Azahar.
+  card. It is slow so far: about 15 frames a second in Azahar.
   See [docs/BOOT_PROGRESS.md](docs/BOOT_PROGRESS.md). The full work list is
   [docs/PLATFORM_TODO.txt](docs/PLATFORM_TODO.txt).
 

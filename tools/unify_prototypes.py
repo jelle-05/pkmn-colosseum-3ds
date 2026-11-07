@@ -1277,7 +1277,7 @@ def compile_cxx(u, decomp, obj):
     to what the rest of the game expects: the MWCC-mangled name where the
     original object has one, otherwise the plain C name."""
     bin_ = compile_check.DEVKITARM / "bin"
-    cmd = [str(bin_ / "arm-none-eabi-g++.exe"), *compile_check.ARCH, "-O1",
+    cmd = [str(bin_ / "arm-none-eabi-g++.exe"), *compile_check.ARCH, compile_check.OPT,
            *[f for f in compile_check.SEMANTICS if f != "-fgnu89-inline"],
            "-fpermissive", "-fno-exceptions", "-fno-rtti", "-fdiagnostics-plain-output", "-w",
            "-DBUILD_VERSION=0", "-DVERSION_GC6E01", "-DNDEBUG=1", "-DPORT=1", "-D__3DS__",
@@ -1329,7 +1329,7 @@ def compile_unified(pp, args):
         src = args.out / "src" / (u["name"] + ".i")
         obj = args.out / "obj" / (u["name"] + ".o")
         obj.parent.mkdir(parents=True, exist_ok=True)
-        cmd = [str(cc), *compile_check.ARCH, "-O1", *compile_check.SEMANTICS,
+        cmd = [str(cc), *compile_check.ARCH, compile_check.OPT, *compile_check.SEMANTICS,
                "-fdiagnostics-plain-output", "-fmax-errors=50", "-std=gnu99",
                "-Wdouble-promotion", *compile_check.PERMISSIVE, "-x", "cpp-output",
                "-c", str(src), "-o", str(obj)]

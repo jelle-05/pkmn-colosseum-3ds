@@ -16,6 +16,7 @@
 
 #include "gx_state.h"
 #include "port/host.h"
+#include "port/prof.h"
 
 extern void __gx_state_defaults(void);
 extern unsigned char* __GXFifoPtr;
@@ -94,8 +95,16 @@ void GXCopyDisp(void* dest, int clear)
 {
     (void)dest;
     ensure_frame();             /* an empty frame still shows the clear */
-    host_frame_end();
+    {
+        extern void __gx_draw_flush(void);
+        __gx_draw_flush();
+        PROF_BEGIN(t_end);
+        extern void __port_script_frame(unsigned frame);
+        __port_script_frame(host_frame_end());
+        PROF_END(PROF_FRAME_END, t_end);
+    }
     frame_open = 0;
+    __prof_frame();
     pending_clear = clear;
 }
 
@@ -114,7 +123,14 @@ void GXSetTexCopyDst(gx_u16 wd, gx_u16 ht, int fmt, int mipmap)
 /* EFB-to-texture copies (render to texture) come with the renderer. */
 void GXCopyTex(void* dest, int clear)
 {
-    (void)dest;
+    static int logged;
+    if (logged < 10) {
+        logged++;
+        extern void __port_log(const char* fmt, ...);
+        __port_log("GXCopyTex: src %d %d %d %d -> %p %dx%d fmt %d mip %d clear %d", __gx.tex_src[0],
+                   __gx.tex_src[1], __gx.tex_src[2], __gx.tex_src[3], dest, __gx.tex_dst_w, __gx.tex_dst_h,
+                   __gx.tex_dst_fmt, __gx.tex_dst_mipmap, clear);
+    }
     if (clear)
         pending_clear = 1;
 }

@@ -23,15 +23,18 @@
  * top screen, at half size.
  */
 #include <math.h>
+#include <stddef.h>
 #include <string.h>
 
 #include "gx_state.h"
 #include "port/gpu.h"
 #include "port/host.h"
 #include "port/gc_mem.h"
+#include "port/prof.h"
 
 extern void __port_log(const char* fmt, ...);
 extern void __gx_ensure_frame(void);
+extern unsigned __port_frame_number_peek(void);
 
 /* ---- GameCube enums used here ------------------------------------------------ */
 
@@ -154,41 +157,72 @@ static int vertex_size(int fmt)
     return n;
 }
 
-/* Decodes one vertex at *pp and advances it. */
-static void read_vertex(const unsigned char** pp, int fmt, Vtx* v)
+/* The vertex layout of one draw: the attributes present, in stream order,
+ * with what reading them needs. Built once per draw (layout_setup). */
+typedef struct {
+    unsigned char attr, desc, type, cnt, frac, cs, size;
+    const unsigned char* base;
+    unsigned stride;
+} AttrIn;
+
+static AttrIn layout[GX_VA_TEX0 + 8];
+static int layout_n, layout_mtx_n;
+
+static void layout_setup(int fmt)
 {
-    const unsigned char* p = *pp;
-    memset(v, 0, sizeof(*v));
-    if (__gx.vtx_desc[GX_VA_PNMTXIDX]) {
-        v->pnmtx = *p++;
-        v->has_pnmtx = 1;
-    }
-    for (int i = 0; i < 8; i++)
-        if (__gx.vtx_desc[GX_VA_TEX0MTXIDX + i]) {
-            v->texmtx[i] = *p++;
-            v->has_texmtx[i] = 1;
-        }
+    layout_n = 0;
+    for (int a = GX_VA_PNMTXIDX; a < GX_VA_POS; a++)
+        if (__gx.vtx_desc[a])
+            layout[layout_n++] = (AttrIn){ (unsigned char)a, 1, 0, 0, 0, 1, 1, 0, 0 };
+    layout_mtx_n = layout_n;
     for (int a = GX_VA_POS; a <= GX_VA_TEX0 + 7; a++) {
         int d = __gx.vtx_desc[a];
         if (!d)
             continue;
+        AttrIn* l = &layout[layout_n++];
+        l->attr = (unsigned char)a;
+        l->desc = (unsigned char)d;
+        l->type = __gx.vtx_fmt[fmt][a].type;
+        l->cnt = __gx.vtx_fmt[fmt][a].cnt;
+        l->frac = __gx.vtx_fmt[fmt][a].frac;
+        l->cs = (unsigned char)comp_size(l->type);
+        l->size = (unsigned char)attr_data_size(a, fmt);
+        l->base = __gx.array[a].base;
+        l->stride = __gx.array[a].stride;
+    }
+}
+
+/* Decodes one vertex at *pp (in the layout set up for the draw) and
+ * advances it. Only the flags are cleared: fields are read when present. */
+static void read_vertex(const unsigned char** pp, int fmt, Vtx* v)
+{
+    (void)fmt;
+    const unsigned char* p = *pp;
+    memset(&v->has_nrm, 0, sizeof(*v) - offsetof(Vtx, has_nrm));
+    int i = 0;
+    for (; i < layout_mtx_n; i++) {
+        int a = layout[i].attr;
+        if (a == GX_VA_PNMTXIDX) { v->pnmtx = *p++; v->has_pnmtx = 1; }
+        else { v->texmtx[a - GX_VA_TEX0MTXIDX] = *p++; v->has_texmtx[a - GX_VA_TEX0MTXIDX] = 1; }
+    }
+    for (; i < layout_n; i++) {
+        const AttrIn* l = &layout[i];
         const unsigned char* src;
-        if (d == GX_DIRECT) {
+        if (l->desc == GX_DIRECT) {
             src = p;
-            p += attr_data_size(a, fmt);
+            p += l->size;
         } else {
-            unsigned idx = d == GX_INDEX8 ? p[0] : rd16(p);
-            p += d == GX_INDEX8 ? 1 : 2;
-            if (!__gx.array[a].base)
+            unsigned idx = l->desc == GX_INDEX8 ? p[0] : rd16(p);
+            p += l->desc == GX_INDEX8 ? 1 : 2;
+            if (!l->base)
                 continue;
-            src = (const unsigned char*)__gx.array[a].base + idx * __gx.array[a].stride;
+            src = l->base + idx * l->stride;
         }
-        int cnt = __gx.vtx_fmt[fmt][a].cnt, type = __gx.vtx_fmt[fmt][a].type;
-        int frac = __gx.vtx_fmt[fmt][a].frac, cs = comp_size(type);
+        int a = l->attr, type = l->type, frac = l->frac, cs = l->cs;
         if (a == GX_VA_POS) {
             v->pos[0] = comp(src, type, frac);
             v->pos[1] = comp(src + cs, type, frac);
-            v->pos[2] = cnt ? comp(src + 2 * cs, type, frac) : 0.0f;
+            v->pos[2] = l->cnt ? comp(src + 2 * cs, type, frac) : 0.0f;
         } else if (a == GX_VA_NRM) {
             /* Normals have a fixed point: 6 bits for bytes, 14 for shorts. */
             int nf = type == GX_S8 ? 6 : type == GX_S16 ? 14 : 0;
@@ -201,13 +235,12 @@ static void read_vertex(const unsigned char** pp, int fmt, Vtx* v)
         } else {
             int t = a - GX_VA_TEX0;
             v->tex[t][0] = comp(src, type, frac);
-            v->tex[t][1] = cnt ? comp(src + cs, type, frac) : 0.0f;
+            v->tex[t][1] = l->cnt ? comp(src + cs, type, frac) : 0.0f;
             v->has_tex[t] = 1;
         }
     }
     *pp = p;
 }
-
 /* ---- transform and lighting -------------------------------------------- */
 
 static const float* pos_matrix(unsigned id)
@@ -258,6 +291,13 @@ static void project(const float* e, float* clip)
         y = p[3] * e[1] + p[4];
         z = p[5] * e[2] + p[6];
         w = 1.0f;
+    }
+    /* With clipping off (GXSetClipMode(GX_CLIP_DISABLE)) the GameCube still
+     * draws what lies on or beyond the depth range's ends; 2D overlays sit
+     * exactly at the far end. The PICA always clips, so keep z just inside. */
+    if (__gx.clip_mode == 1 && w > 0) {
+        if (z > -1e-5f * w) z = -1e-5f * w;
+        if (z < -(1.0f - 1e-5f) * w) z = -(1.0f - 1e-5f) * w;
     }
     clip[0] = vp_ax * x + vp_bx * w;
     clip[1] = vp_ay * y + vp_by * w;
@@ -334,7 +374,7 @@ static void texgen(int i, const Vtx* v, const unsigned char* c0, float* out)
     float in[3] = { 0, 0, 1 };
     if (src == 0) { memcpy(in, v->pos, sizeof(in)); }                   /* GX_TG_POS */
     else if (src == 1) { memcpy(in, v->nrm, sizeof(in)); }              /* GX_TG_NRM */
-    else if (src >= 4 && src <= 11) { in[0] = v->tex[src - 4][0]; in[1] = v->tex[src - 4][1]; }
+    else if (src >= 4 && src <= 11 && v->has_tex[src - 4]) { in[0] = v->tex[src - 4][0]; in[1] = v->tex[src - 4][1]; }
     if (func == 10) {                                                   /* GX_TG_SRTG */
         out[0] = c0[0] / 255.0f; out[1] = c0[1] / 255.0f;
         return;
@@ -366,12 +406,18 @@ typedef struct {
     unsigned char fmt, tlut_fmt;
     unsigned tex;
     unsigned short tw, th;            /* the PICA texture's (power-of-two) size */
+    unsigned bytes;                   /* size of the GX image */
+    unsigned char stale;              /* written since decoded (DCFlushRange) */
 } TexEntry;
 
 #define TEX_CACHE 1024
+#define TEX_HASH_BITS 11
+#define TEX_HASH (1 << TEX_HASH_BITS)    /* twice TEX_CACHE, so probing ends */
 static TexEntry tex_cache[TEX_CACHE];
+static unsigned short tex_hash[TEX_HASH];
 static int tex_count;
 static unsigned char* decode_buf;     /* RGBA8, w*h*4, reused */
+static unsigned tex_lo = ~0u, tex_hi;   /* address range of all cached images */
 static unsigned decode_cap;
 
 static unsigned pot(unsigned v)
@@ -533,6 +579,30 @@ static void upload(unsigned tex, int w, int h, int tw, int th)
     host_gpu_tex_upload(tex);
 }
 
+/* Bytes of a GX image: whole blocks of the format's block size. */
+static unsigned image_bytes(int w, int h, int fmt)
+{
+    static const unsigned char bw[16] = { 8, 8, 8, 4, 4, 4, 4, 4, 8, 8, 4, 4, 4, 4, 8, 4 };
+    static const unsigned char bh[16] = { 8, 4, 4, 4, 4, 4, 4, 4, 8, 4, 4, 4, 4, 4, 8, 4 };
+    static const unsigned char bb[16] = { 32, 32, 32, 32, 32, 32, 64, 32, 32, 32, 32, 32, 32, 32, 32, 32 };
+    unsigned bx = (w + bw[fmt & 15] - 1) / bw[fmt & 15], by = (h + bh[fmt & 15] - 1) / bh[fmt & 15];
+    return bx * by * bb[fmt & 15];
+}
+
+/* The game wrote [addr, addr + len) and flushed it for the GPU: textures
+ * decoded from there are decoded again at their next use. */
+void __gx_tex_written(unsigned addr, unsigned len)
+{
+    if (addr >= tex_hi || addr + len <= tex_lo)
+        return;
+    for (int i = 0; i < tex_count; i++) {
+        TexEntry* e = &tex_cache[i];
+        unsigned a = (unsigned)e->image;
+        if (addr < a + e->bytes && addr + len > a)
+            e->stale = 1;
+    }
+}
+
 /* The host texture for texture map `map`, and the scale from GX texture
  * coordinates to it (a texture padded to a power of two). */
 static unsigned texture(int map, float* ss, float* st, GpuUnit* unit)
@@ -558,11 +628,21 @@ static unsigned texture(int map, float* ss, float* st, GpuUnit* unit)
     unit->mag = (mode0 >> 4) & 1 ? PICA_LINEAR : PICA_NEAREST;
     unit->min = unit->mag;
 
-    for (int i = 0; i < tex_count; i++) {
+    /* Hash on the image address, linear probing; slots hold index + 1. */
+    unsigned slot = (((unsigned)image >> 5) * 2654435761u) >> (32 - TEX_HASH_BITS);
+    for (;; slot = (slot + 1) & (TEX_HASH - 1)) {
+        int i = tex_hash[slot] - 1;
+        if (i < 0)
+            break;
         TexEntry* e = &tex_cache[i];
         if (e->image == image && e->w == w && e->h == h && e->fmt == fmt && e->tlut == lut) {
             *ss = (float)w / e->tw;
             *st = (float)h / e->th;
+            if (e->stale) {                 /* the game wrote the image again */
+                e->stale = 0;
+                if (decode_texture(image, w, h, fmt, lut, lut_fmt))
+                    upload(e->tex, w < e->tw ? w : e->tw, h < e->th ? h : e->th, e->tw, e->th);
+            }
             return e->tex;
         }
     }
@@ -575,9 +655,14 @@ static unsigned texture(int map, float* ss, float* st, GpuUnit* unit)
     if (!tex)
         return 0;
     upload(tex, w < tw ? w : tw, h < th ? h : th, tw, th);
+    tex_hash[slot] = (unsigned short)(tex_count + 1);
     TexEntry* e = &tex_cache[tex_count++];
     e->image = image; e->tlut = lut; e->w = w; e->h = h; e->fmt = fmt; e->tlut_fmt = lut_fmt;
     e->tex = tex; e->tw = tw; e->th = th;
+    e->bytes = image_bytes(w, h, fmt);
+    e->stale = 0;
+    if ((unsigned)image < tex_lo) tex_lo = (unsigned)image;
+    if ((unsigned)image + e->bytes > tex_hi) tex_hi = (unsigned)image + e->bytes;
     *ss = (float)w / tw;
     *st = (float)h / th;
     return tex;
@@ -999,6 +1084,42 @@ static void log_tev(int units, const int* unit_map)
     (void)unit_map;
 }
 
+/* ---- batching ------------------------------------------------------------------
+ * Draws with the same state whose vertices follow each other in the buffer
+ * are sent to the host as one. The pending draw goes out when the state
+ * changes and before the frame ends (__gx_draw_flush). */
+
+static GpuDraw pending;
+static int have_pending;
+
+static int same_state(const GpuDraw* a, const GpuDraw* b)
+{
+    unsigned off = (unsigned)((const char*)&a->unit[0] - (const char*)a);   /* after first, count */
+    return memcmp((const char*)a + off, (const char*)b + off, sizeof(GpuDraw) - off) == 0;
+}
+
+void __gx_draw_flush(void)
+{
+    if (!have_pending)
+        return;
+    have_pending = 0;
+    PROF_BEGIN(t_gpu);
+    host_gpu_draw((const void*)&pending);
+    PROF_END(PROF_GPU_SUBMIT, t_gpu);
+}
+
+static void submit(const GpuDraw* d)
+{
+    if (!d->count)
+        return;
+    if (have_pending && pending.first + pending.count == d->first && same_state(&pending, d)) {
+        pending.count += d->count;
+        return;
+    }
+    __gx_draw_flush();
+    pending = *d;
+    have_pending = 1;
+}
 /* ---- primitives ----------------------------------------------------------------- */
 
 static GpuVertex* vbuf;
@@ -1007,6 +1128,14 @@ static int warned_full;
 
 void __gx_draw_frame_start(void)
 {
+    static unsigned frames, verts, draws_logged;
+    verts += vused;
+    if (++frames == 120 && draws_logged < 20) {
+        draws_logged++;
+        __port_log("gx: %u triangle vertices per frame", verts / 120);
+        frames = verts = 0;
+    }
+    have_pending = 0;
     if (!vbuf) {
         vbuf = (GpuVertex*)host_gpu_vertices();
         vcap = host_gpu_capacity();
@@ -1016,12 +1145,25 @@ void __gx_draw_frame_start(void)
 
 /* One decoded vertex to a GPU vertex: transform, lighting, texture
  * coordinates for the units in use (scaled for padded textures). */
+/* What every vertex of a draw needs, worked out once (emit_setup). */
+static int emit_units, emit_normals, emit_light;
+
+static void emit_setup(int units, const int* unit_coord)
+{
+    emit_units = units;
+    emit_light = __gx.num_chans > 0 && (__gx.chan[0].enable || __gx.chan[2].enable);
+    emit_normals = emit_light;
+    for (int u = 0; u < units; u++)
+        if (unit_coord[u] >= 0 && unit_coord[u] < GX_MAX_TEXCOORD && __gx.texgen[unit_coord[u]].src == 1)
+            emit_normals = 1;                                   /* GX_TG_NRM */
+}
+
 static void emit(const Vtx* v, GpuVertex* out, const int* unit_coord, const float (*scale)[2])
 {
     float e[3], n[3] = { 0, 0, 1 };
     unsigned mid = v->has_pnmtx ? v->pnmtx : (__gx.current_mtx & 0xFF);
     mul34(pos_matrix(mid), v->pos, 1.0f, e);
-    if (v->has_nrm) {
+    if (v->has_nrm && emit_normals) {
         unsigned i = mid / 3;
         const float(*nm)[3] = __gx.nrm_mtx[i < GX_PNMTX_COUNT ? i : 0];
         for (int r = 0; r < 3; r++)
@@ -1039,7 +1181,7 @@ static void emit(const Vtx* v, GpuVertex* out, const int* unit_coord, const floa
         channel(2, v, e, n, c);
     }
     memcpy(out->color, c, 4);
-    for (int u = 0; u < GPU_MAX_UNITS; u++) {
+    for (int u = 0; u < emit_units; u++) {
         float tc[2] = { 0, 0 };
         if (unit_coord[u] >= 0 && unit_coord[u] < __gx.num_texgens)
             texgen(unit_coord[u], v, c, tc);
@@ -1060,39 +1202,52 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
         __gx_draw_frame_start();
     viewport_setup();
 
-    GpuDraw d;
-    memset(&d, 0, sizeof(d));
-    /* Texture units: one per distinct (map, coordinate) the TEV stages use. */
-    int unit_map[GPU_MAX_UNITS] = { -1, -1, -1 }, unit_coord[GPU_MAX_UNITS] = { -1, -1, -1 };
-    float scale[GPU_MAX_UNITS][2] = { { 1, 1 }, { 1, 1 }, { 1, 1 } };
-    int units = 0;
-    for (int s = 0; s < GX_MAX_TEVSTAGE; s++) {
-        unit_of_stage[s] = -1;
-        if (s >= __gx.num_tev_stages)
-            continue;
-        int map = __gx.tev[s].map, coord = __gx.tev[s].coord;
-        if (map >= GX_MAX_TEXMAP || !__gx.texmap_loaded[map])
-            continue;
-        int u;
-        for (u = 0; u < units; u++)
-            if (unit_map[u] == map && unit_coord[u] == coord)
-                break;
-        if (u == units) {
-            if (units == GPU_MAX_UNITS)
-                continue;
-            unsigned tex = texture(map, &scale[u][0], &scale[u][1], &d.unit[u]);
-            if (!tex)
-                continue;
-            d.unit[u].tex = tex;
-            unit_map[u] = map;
-            unit_coord[u] = coord;
-            units++;
+    /* The draw state, translated again only when a GX setter changed it
+     * (matrix loads do not count, gx_state.c). */
+    static GpuDraw d;
+    static int unit_coord[GPU_MAX_UNITS], units, translated;
+    static float scale[GPU_MAX_UNITS][2];
+    if (__gx.dirty || !translated) {
+        __gx.dirty = 0;
+        translated = 1;
+        memset(&d, 0, sizeof(d));
+        /* Texture units: one per distinct (map, coordinate) the TEV stages use. */
+        int unit_map[GPU_MAX_UNITS] = { -1, -1, -1 };
+        for (int u = 0; u < GPU_MAX_UNITS; u++) {
+            unit_coord[u] = -1;
+            scale[u][0] = scale[u][1] = 1.0f;
         }
-        unit_of_stage[s] = u;
+        units = 0;
+        for (int s = 0; s < GX_MAX_TEVSTAGE; s++) {
+            unit_of_stage[s] = -1;
+            if (s >= __gx.num_tev_stages)
+                continue;
+            int map = __gx.tev[s].map, coord = __gx.tev[s].coord;
+            if (map >= GX_MAX_TEXMAP || !__gx.texmap_loaded[map])
+                continue;
+            int u;
+            for (u = 0; u < units; u++)
+                if (unit_map[u] == map && unit_coord[u] == coord)
+                    break;
+            if (u == units) {
+                if (units == GPU_MAX_UNITS)
+                    continue;
+                unsigned tex = texture(map, &scale[u][0], &scale[u][1], &d.unit[u]);
+                if (!tex)
+                    continue;
+                d.unit[u].tex = tex;
+                unit_map[u] = map;
+                unit_coord[u] = coord;
+                units++;
+            }
+            unit_of_stage[s] = u;
+        }
+        combiners(&d);
+        pixel_state(&d);
+        log_tev(units, unit_map);
     }
-    combiners(&d);
-    pixel_state(&d);
-    log_tev(units, unit_map);
+    layout_setup(fmt);
+    emit_setup(units, unit_coord);
 
     /* Triangles from the primitive, decoded a vertex at a time. */
     const unsigned char* p = data;
@@ -1104,6 +1259,7 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
         return;
     }
     GpuVertex* out = vbuf + vused;
+    PROF_BEGIN(t_vtx);
     GpuVertex a, b, cur, q[4];                 /* a, b: the two vertices before cur */
     unsigned written = 0;
     for (unsigned i = 0; i < count; i++) {
@@ -1142,10 +1298,68 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
     }
     if (prim == GX_TRIANGLES)
         written -= written % 3;
+    /* Bring-up aid: the first draw whose x is not finite, in detail. */
+    static int badx_logged;
+    if (written && badx_logged < 2 && !(fabsf(out[0].pos[0] / out[0].pos[3]) < 1e6f)) {
+        badx_logged++;
+        const unsigned char* q = data;
+        Vtx v0;
+        layout_setup(fmt);
+        read_vertex(&q, fmt, &v0);
+        unsigned mid = v0.has_pnmtx ? v0.pnmtx : (__gx.current_mtx & 0xFF);
+        const float* m = pos_matrix(mid);
+        __port_log("bad x: pos %d %d %d (x1000) pnmtx %d/%u fmt %d pos cnt %d type %d frac %d desc %d; clip %d %d %d %d",
+                   (int)(v0.pos[0] * 1000), (int)(v0.pos[1] * 1000), (int)(v0.pos[2] * 1000), v0.has_pnmtx, mid, fmt,
+                   __gx.vtx_fmt[fmt][GX_VA_POS].cnt, __gx.vtx_fmt[fmt][GX_VA_POS].type,
+                   __gx.vtx_fmt[fmt][GX_VA_POS].frac, __gx.vtx_desc[GX_VA_POS], (int)out[0].pos[0], (int)out[0].pos[1],
+                   (int)out[0].pos[2], (int)out[0].pos[3]);
+        for (int r = 0; r < 3; r++)
+            __port_log("  mtx row %d: %d %d %d %d (x1000)", r, (int)(m[r * 4] * 1000), (int)(m[r * 4 + 1] * 1000),
+                       (int)(m[r * 4 + 2] * 1000), (int)(m[r * 4 + 3] * 1000));
+        __port_log("  proj %d: %d %d %d %d %d %d (x1000); viewport %d %d %d %d", (int)__gx.projection[0],
+                   (int)(__gx.projection[1] * 1000), (int)(__gx.projection[2] * 1000), (int)(__gx.projection[3] * 1000),
+                   (int)(__gx.projection[4] * 1000), (int)(__gx.projection[5] * 1000), (int)(__gx.projection[6] * 1000),
+                   (int)__gx.viewport[0], (int)__gx.viewport[1], (int)__gx.viewport[2], (int)__gx.viewport[3]);
+    }
+    /* Bring-up aid: the first orthographic (2D) draws, with their extent. */
+    static int ortho_logged;
+    if (__gx.projection[0] == (float)GXENUM_ORTHOGRAPHIC && ortho_logged < 40 && written && d.unit[0].tex) {
+        ortho_logged++;
+        float mn[3] = { 1e9f, 1e9f, 1e9f }, mx[3] = { -1e9f, -1e9f, -1e9f };
+        for (unsigned i = 0; i < written; i++)
+            for (int k = 0; k < 3; k++) {
+                float v = out[i].pos[k] / out[i].pos[3];
+                if (v < mn[k]) mn[k] = v;
+                if (v > mx[k]) mx[k] = v;
+            }
+        __port_log("ortho draw: %u verts x %d..%d y %d..%d z %d..%d (x1000) tex %u z %d/%d blend %d stages %d clip %d",
+                   written, (int)(mn[0] * 1000), (int)(mx[0] * 1000), (int)(mn[1] * 1000), (int)(mx[1] * 1000),
+                   (int)(mn[2] * 1000), (int)(mx[2] * 1000), (unsigned)d.unit[0].tex, __gx.z_compare,
+                   __gx.z_update, __gx.blend_type, d.num_stages, __gx.clip_mode);
+        if (mx[0] - mn[0] > 100.0f || mn[1] != mn[1]) {
+            __port_log("  bad: %s fmt %d size %d count %u | pos desc %d cnt %d type %d frac %d | clr0 %d %d | tex0 %d %d %d %d"
+                       " | pnmtx %d | first bytes %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                       data == __gx.fifo_base ? "immediate" : "list", fmt, vertex_size(fmt), count,
+                       __gx.vtx_desc[GX_VA_POS], __gx.vtx_fmt[fmt][GX_VA_POS].cnt, __gx.vtx_fmt[fmt][GX_VA_POS].type,
+                       __gx.vtx_fmt[fmt][GX_VA_POS].frac, __gx.vtx_desc[GX_VA_CLR0],
+                       __gx.vtx_fmt[fmt][GX_VA_CLR0].type, __gx.vtx_desc[GX_VA_TEX0],
+                       __gx.vtx_fmt[fmt][GX_VA_TEX0].cnt, __gx.vtx_fmt[fmt][GX_VA_TEX0].type,
+                       __gx.vtx_fmt[fmt][GX_VA_TEX0].frac, __gx.vtx_desc[GX_VA_PNMTXIDX], data[0], data[1],
+                       data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11]);
+            const float* m = pos_matrix(__gx.current_mtx);
+            __port_log("  mtx %u: %d %d %d %d / %d %d %d %d (x1000); proj %d %d %d %d %d %d", (unsigned)__gx.current_mtx,
+                       (int)(m[0] * 1000), (int)(m[1] * 1000), (int)(m[2] * 1000), (int)(m[3] * 1000),
+                       (int)(m[4] * 1000), (int)(m[5] * 1000), (int)(m[6] * 1000), (int)(m[7] * 1000),
+                       (int)(__gx.projection[1] * 1000), (int)(__gx.projection[2] * 1000),
+                       (int)(__gx.projection[3] * 1000), (int)(__gx.projection[4] * 1000),
+                       (int)(__gx.projection[5] * 1000), (int)(__gx.projection[6] * 1000));
+        }
+    }
+    PROF_END(PROF_VERTICES, t_vtx);
     d.first = vused;
     d.count = written;
     vused += written;
-    host_gpu_draw((const void*)&d);
+    submit(&d);
 }
 
 /* ---- immediate mode ------------------------------------------------------------ */

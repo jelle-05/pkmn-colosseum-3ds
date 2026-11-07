@@ -13,6 +13,7 @@
  * framebuffer the game hands to VISetNextFrameBuffer is only remembered.
  */
 #include "port/host.h"
+#include "port/prof.h"
 
 #include "port/gx_types.h"
 #include "../os/os_thread.h"
@@ -125,10 +126,12 @@ void VIWaitForRetrace(void)
         if (__port_self()->thread == 0 && !host_main_loop())
             host_exit(0);
     }
+    PROF_BEGIN(t_wait);
     int level = OSDisableInterrupts();
     gx_u32 count = retrace_count;
     do {
         __port_sleep_on(&retrace_queue);
     } while (count == retrace_count);
     OSRestoreInterrupts(level);
+    PROF_END(PROF_RETRACE_WAIT, t_wait);
 }

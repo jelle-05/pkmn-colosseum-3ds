@@ -11,6 +11,8 @@
 
 GXState __gx;
 
+/* Marks the draw state changed, so the renderer translates it again.
+ * Matrix loads do not: they only affect the vertices (gx/gx_draw.c). */
 #define DIRTY() (__gx.dirty = 1)
 
 /* ---- matrices -------------------------------------------------------------- */
@@ -19,7 +21,6 @@ void GXLoadPosMtxImm(const GXMtx m, gx_u32 id)
 {
     if (id / 3 < GX_PNMTX_COUNT)
         memcpy(__gx.pos_mtx[id / 3], m, sizeof(GXMtx));
-    DIRTY();
 }
 
 void GXLoadNrmMtxImm(const GXMtx m, gx_u32 id)
@@ -28,7 +29,6 @@ void GXLoadNrmMtxImm(const GXMtx m, gx_u32 id)
         for (int r = 0; r < 3; r++)
             for (int c = 0; c < 3; c++)
                 __gx.nrm_mtx[id / 3][r][c] = m[r][c];
-    DIRTY();
 }
 
 void GXLoadTexMtxImm(const gx_f32 m[][4], gx_u32 id, int type)
@@ -48,10 +48,9 @@ void GXLoadTexMtxImm(const gx_f32 m[][4], gx_u32 id, int type)
             __gx.tex_mtx_type[i] = (gx_u8)type;
         }
     }
-    DIRTY();
 }
 
-void GXSetCurrentMtx(gx_u32 id) { __gx.current_mtx = id; DIRTY(); }
+void GXSetCurrentMtx(gx_u32 id) { __gx.current_mtx = id; }
 
 void GXSetProjection(const GXMtx44 m, int type)
 {

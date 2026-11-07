@@ -27,6 +27,9 @@ static GpuVertex* vbuf;
 static C3D_Tex textures[MAX_TEXTURES];
 static u8 tex_used[MAX_TEXTURES];
 static int ready;
+static u32 vbuf_used;              /* highest vertex drawn this frame */
+static GpuDraw last;                /* the state set by the previous draw */
+static int have_last;
 
 void host_gpu_init(void)
 {
@@ -68,6 +71,15 @@ void host_gpu_frame(void)
 
     /* GX depth: z/w runs from -1 at the near plane to 0 at the far one. */
     C3D_DepthMap(true, 1.0f, 1.0f);
+    have_last = 0;                  /* the frame starts with citro3d's state */
+}
+
+/* Before C3D_FrameEnd: the GPU reads this frame's vertices from here. */
+void host_gpu_frame_end(void)
+{
+    if (vbuf_used)
+        GSPGPU_FlushDataCache(vbuf, vbuf_used * sizeof(GpuVertex));
+    vbuf_used = 0;
 }
 
 void* host_gpu_vertices(void) { host_gpu_init(); return vbuf; }
@@ -114,7 +126,17 @@ void host_gpu_draw(const void* draw)
     const GpuDraw* d = draw;
     if (!ready || !d->count || d->first + d->count > MAX_VERTICES)
         return;
-    GSPGPU_FlushDataCache(&vbuf[d->first], d->count * sizeof(GpuVertex));
+    if (d->first + d->count > vbuf_used)
+        vbuf_used = d->first + d->count;
+
+    /* Only what changed since the previous draw. */
+    u32 off = (u32)((const char*)&d->unit[0] - (const char*)d);
+    if (have_last && memcmp((const char*)&last + off, (const char*)d + off, sizeof(GpuDraw) - off) == 0) {
+        C3D_DrawArrays(GPU_TRIANGLES, d->first, d->count);
+        return;
+    }
+    last = *d;
+    have_last = 1;
 
     for (int u = 0; u < GPU_MAX_UNITS; u++) {
         u32 h = d->unit[u].tex;

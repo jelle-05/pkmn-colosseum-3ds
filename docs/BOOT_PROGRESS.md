@@ -115,6 +115,45 @@ converting:
                                (docs/RENDERER.md). The title screen shows: the
                                desert with its ruins and the 3D logo, at about
                                10 frames a second in Azahar
+    no text after START        the text camera's aspect ratio was 0:
+                               gfxSetPerspective passes its floats on in
+                               registers without naming them; replaced
+                               (game_patch/gs_gfx_projection.c)
+    garbled text               the font's glyph texture is rewritten; textures
+                               flushed with DCFlushRange are decoded again
+    main menu                  START, then A on "There is no Memory Card in
+                               Slot A", YES on "Continue without saving?":
+                               the main menu (Battle Mode, Story Mode, Options)
+                               at 15 frames a second in Azahar
+
+
+Floats passed in registers
+--------------------------
+
+Some decomp functions match MWCC's code by relying on float arguments
+staying in the PowerPC's f1-f8 from one call to the next, without passing
+them. On ARM those values are lost. A scan of the decomp finds 24 calls
+without arguments to functions that take floats; the projection setters
+are replaced, the rest are listed here and will show up as wrong values
+when the game reaches them:
+
+    GSmtx44Ortho, GSmtx44Perspective     replaced
+    gfxSetPerspective, gfxSetOrtho       replaced (record path too)
+    __GXInitGX                           not used (the platform's GXInit)
+    _preReliveDisplayHokoraParticleThreadFunc__Fv  gsParticleSetVecB, waitTime__Ff
+    dbgMenuSendAllMail                   mailMainSendAllMail
+    effectPlayWaza, fieldStartEncount, fightActionFlowKaisiPre,
+    fightStartEncount                    fadeSet
+    fadeEffectHookFunction_carde         fn_801C5F6C
+    fightOutPokemonHokakuEffect          fn_801DA2C4
+    fightTrainerAiWazaValueMigawari      fightTrainerAiGetHpPercent
+    floorElevatorSetupCharacters         GSmodelGetFrameCount, peopleStartTurn,
+                                         std059_characterSetPosition
+    fn_800E0718                          C_QUATRotAxisRad
+    fn_80118DE0                          psSetGeneratorAngleRadiusScale
+    pcMenuDrawPurifiedCount              gfxVtxTexCoord
+    reliveCeremonyAll                    pokemonSetDp
+    std232_characterApproachPlayer       peopleTurnToPoint
 
 The game's own log (GSlogWrite) now goes to the port log as well, which
 says what it is doing: it reports "GSflagClear: Initialization has not
