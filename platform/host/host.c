@@ -23,7 +23,26 @@ static void be_store32(host_u32* p, host_u32 v) { *p = __builtin_bswap32(v); }
 /* ---- process -------------------------------------------------------------------- */
 
 int host_main_loop(void) { return aptMainLoop(); }
-void host_exit(int code) { exit(code); }
+
+/* Set when the program is quitting. The game's other threads (retrace,
+ * interrupts, DVD) keep running while exit() shuts the services down, and
+ * the retrace thread runs above the main thread: without this it read the
+ * buttons after hidExit (a data abort at address 0x10, on real hardware).
+ * Host functions those threads call stop them here instead. */
+volatile int host_quitting;
+
+void host_park_if_quitting(void)
+{
+    while (host_quitting)
+        svcSleepThread(1000000000LL);
+}
+
+void host_exit(int code)
+{
+    host_quitting = 1;
+    svcSleepThread(50 * 1000000LL);            /* let the other threads reach a host call */
+    exit(code);
+}
 void host_break(int reason) { svcBreak((UserBreakType)reason); }
 void host_debug_string(const char* s, host_u32 len) { svcOutputDebugString(s, (s32)len); }
 
@@ -54,8 +73,17 @@ void host_sleep_us(host_u32 us) { svcSleepThread((s64)us * 1000); }
 
 typedef struct { host_entry fn; void* arg; } Start;
 
+/* VFP "RunFast": denormals flushed to zero, default NaN. Otherwise the
+ * ARM11's VFP hands every operation on a denormal to a slow software
+ * handler, which Azahar does not imitate. Set for every thread. */
+static void fp_runfast(void)
+{
+    __asm__ volatile("vmsr fpscr, %0" : : "r"(0x03000000));
+}
+
 static void thread_start(void* p)
 {
+    fp_runfast();
     Start s = *(Start*)p;
     free(p);
     host_be_call(s.fn, s.arg);
@@ -153,6 +181,7 @@ host_u32 host_file_size(int fd)
 
 host_u32 host_file_read(int fd, void* buf, host_u32 size, host_u32 offset)
 {
+    host_park_if_quitting();
     if (fd < 0 || fd >= MAX_FILES || !files[fd])
         return 0;
     if (fseeko(files[fd], (off_t)offset, SEEK_SET))
@@ -187,6 +216,7 @@ void host_input_init(void) { irrstInit(); }
 
 host_u32 host_input_scan(void)
 {
+    host_park_if_quitting();
     hidScanInput();
     return hidKeysHeld();
 }
@@ -194,6 +224,7 @@ host_u32 host_input_scan(void)
 host_u32 host_input_circle(void)
 {
     circlePosition cp;
+    host_park_if_quitting();
     hidCircleRead(&cp);
     return (host_u32)(u16)cp.dx | (host_u32)(u16)cp.dy << 16;
 }
@@ -201,6 +232,7 @@ host_u32 host_input_circle(void)
 host_u32 host_input_cstick(void)
 {
     circlePosition cs;
+    host_park_if_quitting();
     irrstCstickRead(&cs);
     return (host_u32)(u16)cs.dx | (host_u32)(u16)cs.dy << 16;
 }
@@ -225,6 +257,9 @@ static void fill_table(host_u32* t)
 
 int main(void)
 {
+    /* The New 3DS's 804 MHz clock and L2 cache; nothing on an old 3DS. */
+    osSetSpeedupEnable(true);
+    fp_runfast();
     fill_table(__host_table);
     host_be_call(__be_start, 0);
     return 0;

@@ -115,4 +115,10 @@ host_u32 host_frame_end(void)
     return frames;
 }
 
-void host_wait_vblank(void) { gspWaitForVBlank(); }
+extern void host_park_if_quitting(void);
+
+void host_wait_vblank(void)
+{
+    host_park_if_quitting();
+    gspWaitForVBlank();
+}

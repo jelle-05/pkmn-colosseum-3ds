@@ -129,8 +129,12 @@ void host_gpu_tex_free(host_u32 handle)
 
 /* ---- drawing -------------------------------------------------------------------- */
 
+extern volatile int host_quitting;
+
 void host_gpu_draw(const void* draw)
 {
+    if (host_quitting)
+        return;
     const GpuDraw* d = draw;
     if (!ready || !d->count || d->first + d->count > MAX_INDICES)
         return;
