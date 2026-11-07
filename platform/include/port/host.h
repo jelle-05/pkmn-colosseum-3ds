@@ -88,6 +88,8 @@ typedef void (*host_entry)(void* arg);
     /* renderer (port/gpu.h): the frame's vertex buffer, textures, draws */            \
     X(host_gpu_vertices, void*, (void))               /* GpuVertex[capacity] */        \
     X(host_gpu_capacity, host_u32, (void))                                             \
+    X(host_gpu_indices, void*, (void))                /* GpuIndex[index capacity] */   \
+    X(host_gpu_index_capacity, host_u32, (void))                                       \
     X(host_gpu_tex_create, host_u32, (host_u32 width, host_u32 height)) /* RGBA8 */    \
     X(host_gpu_tex_data, void*, (host_u32 tex))                                        \
     X(host_gpu_tex_upload, void, (host_u32 tex))                                       \

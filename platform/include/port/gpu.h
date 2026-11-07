@@ -24,6 +24,9 @@ typedef struct GPU_LE {
     float tc[3][2];
 } GpuVertex;
 
+/* An index into the frame's vertex buffer, as the GPU reads it. */
+typedef struct GPU_LE { unsigned short v; } GpuIndex;
+
 #define GPU_MAX_UNITS 3
 #define GPU_MAX_STAGES 6
 
@@ -41,7 +44,8 @@ typedef struct GPU_LE {
 } GpuStage;
 
 typedef struct GPU_LE {
-    unsigned int first, count;      /* triangles: vertices in the frame's buffer */
+    unsigned int first, count;      /* triangles: indices in the frame's index buffer */
+    unsigned int vertices;          /* vertices used in the frame's buffer so far */
     GpuUnit unit[GPU_MAX_UNITS];
     unsigned char num_stages;
     unsigned char alpha_test, alpha_func, alpha_ref;

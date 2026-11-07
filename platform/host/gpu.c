@@ -17,17 +17,20 @@
 extern const u8 vshader_shbin[];
 extern const u32 vshader_shbin_size;
 
-#define MAX_VERTICES 65536
+#define MAX_VERTICES 65536            /* indices are 16 bits */
+#define MAX_INDICES (MAX_VERTICES * 3)
 #define MAX_TEXTURES 1024
 
 static DVLB_s* dvlb;
 static shaderProgram_s program;
 static int u_tilt;
 static GpuVertex* vbuf;
+static u16* ibuf;
 static C3D_Tex textures[MAX_TEXTURES];
 static u8 tex_used[MAX_TEXTURES];
 static int ready;
 static u32 vbuf_used;              /* highest vertex drawn this frame */
+static u32 ibuf_used;
 static GpuDraw last;                /* the state set by the previous draw */
 static int have_last;
 
@@ -40,6 +43,7 @@ void host_gpu_init(void)
     shaderProgramSetVsh(&program, &dvlb->DVLE[0]);
     u_tilt = shaderInstanceGetUniformLocation(program.vertexShader, "tilt");
     vbuf = linearAlloc(MAX_VERTICES * sizeof(GpuVertex));
+    ibuf = linearAlloc(MAX_INDICES * sizeof(u16));
     ready = 1;
 }
 
@@ -79,11 +83,15 @@ void host_gpu_frame_end(void)
 {
     if (vbuf_used)
         GSPGPU_FlushDataCache(vbuf, vbuf_used * sizeof(GpuVertex));
-    vbuf_used = 0;
+    if (ibuf_used)
+        GSPGPU_FlushDataCache(ibuf, ibuf_used * sizeof(u16));
+    vbuf_used = ibuf_used = 0;
 }
 
 void* host_gpu_vertices(void) { host_gpu_init(); return vbuf; }
+void* host_gpu_indices(void) { host_gpu_init(); return ibuf; }
 host_u32 host_gpu_capacity(void) { return MAX_VERTICES; }
+host_u32 host_gpu_index_capacity(void) { return MAX_INDICES; }
 
 /* ---- textures ------------------------------------------------------------------- */
 
@@ -124,15 +132,17 @@ void host_gpu_tex_free(host_u32 handle)
 void host_gpu_draw(const void* draw)
 {
     const GpuDraw* d = draw;
-    if (!ready || !d->count || d->first + d->count > MAX_VERTICES)
+    if (!ready || !d->count || d->first + d->count > MAX_INDICES)
         return;
-    if (d->first + d->count > vbuf_used)
-        vbuf_used = d->first + d->count;
+    if (d->first + d->count > ibuf_used)
+        ibuf_used = d->first + d->count;
+    if (d->vertices > vbuf_used)
+        vbuf_used = d->vertices;
 
     /* Only what changed since the previous draw. */
     u32 off = (u32)((const char*)&d->unit[0] - (const char*)d);
     if (have_last && memcmp((const char*)&last + off, (const char*)d + off, sizeof(GpuDraw) - off) == 0) {
-        C3D_DrawArrays(GPU_TRIANGLES, d->first, d->count);
+        C3D_DrawElements(GPU_TRIANGLES, d->count, C3D_UNSIGNED_SHORT, &ibuf[d->first]);
         return;
     }
     last = *d;
@@ -176,5 +186,5 @@ void host_gpu_draw(const void* draw)
     C3D_DepthTest(d->depth_test, d->depth_func, d->write_mask);
     C3D_CullFace(d->cull);
 
-    C3D_DrawArrays(GPU_TRIANGLES, d->first, d->count);
+    C3D_DrawElements(GPU_TRIANGLES, d->count, C3D_UNSIGNED_SHORT, &ibuf[d->first]);
 }

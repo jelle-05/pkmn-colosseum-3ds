@@ -1114,6 +1114,7 @@ static void submit(const GpuDraw* d)
         return;
     if (have_pending && pending.first + pending.count == d->first && same_state(&pending, d)) {
         pending.count += d->count;
+        pending.vertices = d->vertices;
         return;
     }
     __gx_draw_flush();
@@ -1123,7 +1124,8 @@ static void submit(const GpuDraw* d)
 /* ---- primitives ----------------------------------------------------------------- */
 
 static GpuVertex* vbuf;
-static unsigned vcap, vused;
+static GpuIndex* ibuf;
+static unsigned vcap, vused, icap, iused;
 static int warned_full;
 
 void __gx_draw_frame_start(void)
@@ -1139,8 +1141,10 @@ void __gx_draw_frame_start(void)
     if (!vbuf) {
         vbuf = (GpuVertex*)host_gpu_vertices();
         vcap = host_gpu_capacity();
+        ibuf = (GpuIndex*)host_gpu_indices();
+        icap = host_gpu_index_capacity();
     }
-    vused = 0;
+    vused = iused = 0;
 }
 
 /* One decoded vertex to a GPU vertex: transform, lighting, texture
@@ -1253,51 +1257,51 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
     const unsigned char* p = data;
     unsigned tris = prim == GX_QUADS ? count / 4 * 2 : prim == GX_TRIANGLES ? count / 3 : count - 2;
     unsigned need = tris * 3;
-    if (vused + need > vcap) {
+    if (vused + count > vcap || iused + need > icap) {
         if (!warned_full++)
             __port_log("gx: vertex buffer full (%u)", vcap);
         return;
     }
+    /* Every vertex is transformed and stored once; the triangles are
+     * indices into them. */
     GpuVertex* out = vbuf + vused;
+    GpuIndex* idx = ibuf + iused;
     PROF_BEGIN(t_vtx);
-    GpuVertex a, b, cur, q[4];                 /* a, b: the two vertices before cur */
-    unsigned written = 0;
+    unsigned base = vused, written = 0;
     for (unsigned i = 0; i < count; i++) {
         Vtx v;
         read_vertex(&p, fmt, &v);
-        emit(&v, &cur, unit_coord, (const float(*)[2])scale);
-        switch (prim) {
-        case GX_QUADS:
-            q[i & 3] = cur;
-            if ((i & 3) == 3) {
-                out[written++] = q[0]; out[written++] = q[1]; out[written++] = q[2];
-                out[written++] = q[0]; out[written++] = q[2]; out[written++] = q[3];
-            }
-            break;
-        case GX_TRIANGLES:
-            out[written++] = cur;
-            break;
-        case GX_TRIANGLESTRIP:
-            /* Triangle k = i - 2 is (a, b, cur), with every other one turned
-             * around to keep the winding. */
-            if (i >= 2) {
-                if ((i - 2) & 1) { out[written++] = b; out[written++] = a; }
-                else { out[written++] = a; out[written++] = b; }
-                out[written++] = cur;
-            }
-            a = b;
-            b = cur;
-            break;
-        case GX_TRIANGLEFAN:
-            /* a is the centre, b the previous rim vertex. */
-            if (i == 0) a = cur;
-            else if (i >= 2) { out[written++] = a; out[written++] = b; out[written++] = cur; }
-            b = cur;
-            break;
-        }
+        emit(&v, &out[i], unit_coord, (const float(*)[2])scale);
     }
-    if (prim == GX_TRIANGLES)
-        written -= written % 3;
+    switch (prim) {
+    case GX_QUADS:
+        for (unsigned i = 0; i + 3 < count; i += 4) {
+            unsigned k = base + i;
+            idx[written++].v = k; idx[written++].v = k + 1; idx[written++].v = k + 2;
+            idx[written++].v = k; idx[written++].v = k + 2; idx[written++].v = k + 3;
+        }
+        break;
+    case GX_TRIANGLES:
+        for (unsigned i = 0; i + 2 < count; i += 3) {
+            idx[written++].v = base + i; idx[written++].v = base + i + 1; idx[written++].v = base + i + 2;
+        }
+        break;
+    case GX_TRIANGLESTRIP:
+        /* Triangle k is (k, k+1, k+2), every other one turned around to
+         * keep the winding. */
+        for (unsigned k = 0; k + 2 < count; k++) {
+            unsigned a = base + k, b = a + 1;
+            if (k & 1) { idx[written++].v = b; idx[written++].v = a; }
+            else { idx[written++].v = a; idx[written++].v = b; }
+            idx[written++].v = a + 2;
+        }
+        break;
+    case GX_TRIANGLEFAN:
+        for (unsigned k = 1; k + 1 < count; k++) {
+            idx[written++].v = base; idx[written++].v = base + k; idx[written++].v = base + k + 1;
+        }
+        break;
+    }
     /* Bring-up aid: the first draw whose x is not finite, in detail. */
     static int badx_logged;
     if (written && badx_logged < 2 && !(fabsf(out[0].pos[0] / out[0].pos[3]) < 1e6f)) {
@@ -1321,62 +1325,12 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
                    (int)(__gx.projection[4] * 1000), (int)(__gx.projection[5] * 1000), (int)(__gx.projection[6] * 1000),
                    (int)__gx.viewport[0], (int)__gx.viewport[1], (int)__gx.viewport[2], (int)__gx.viewport[3]);
     }
-    /* Bring-up aid: the translucent untextured draws of frame 1000, with
-     * what they became, and how many draws came before and after. */
-    static unsigned f1000_draws;
-    if (__port_frame_number_peek() == 1000) {
-        f1000_draws++;
-        if (written && !d.unit[0].tex && out[0].color[3] < 255) {
-            const GpuStage* g = &d.stage[0];
-            __port_log("f1000 draw %u (vertex %u): %u verts proj %d color %02x%02x%02x%02x | blend %d eq %d %d/%d"
-                       " | mask %02x depth %d/%d | stage0 rgb %d %d %d f%d a %d %d %d f%d | stages %d",
-                       f1000_draws, vused, written, (int)__gx.projection[0], out[0].color[0], out[0].color[1],
-                       out[0].color[2], out[0].color[3], d.blend, d.blend_eq, d.blend_src, d.blend_dst, d.write_mask,
-                       d.depth_test, d.depth_func, g->src_rgb[0], g->src_rgb[1], g->src_rgb[2], g->func_rgb,
-                       g->src_a[0], g->src_a[1], g->src_a[2], g->func_a, d.num_stages);
-        }
-    } else if (f1000_draws && __port_frame_number_peek() == 1001) {
-        __port_log("f1000: %u draws in all", f1000_draws);
-        f1000_draws = 0;
-    }
-    /* Bring-up aid: the first orthographic (2D) draws, with their extent. */
-    static int ortho_logged;
-    if (__gx.projection[0] == (float)GXENUM_ORTHOGRAPHIC && ortho_logged < 40 && written && d.unit[0].tex) {
-        ortho_logged++;
-        float mn[3] = { 1e9f, 1e9f, 1e9f }, mx[3] = { -1e9f, -1e9f, -1e9f };
-        for (unsigned i = 0; i < written; i++)
-            for (int k = 0; k < 3; k++) {
-                float v = out[i].pos[k] / out[i].pos[3];
-                if (v < mn[k]) mn[k] = v;
-                if (v > mx[k]) mx[k] = v;
-            }
-        __port_log("ortho draw: %u verts x %d..%d y %d..%d z %d..%d (x1000) tex %u z %d/%d blend %d stages %d clip %d",
-                   written, (int)(mn[0] * 1000), (int)(mx[0] * 1000), (int)(mn[1] * 1000), (int)(mx[1] * 1000),
-                   (int)(mn[2] * 1000), (int)(mx[2] * 1000), (unsigned)d.unit[0].tex, __gx.z_compare,
-                   __gx.z_update, __gx.blend_type, d.num_stages, __gx.clip_mode);
-        if (mx[0] - mn[0] > 100.0f || mn[1] != mn[1]) {
-            __port_log("  bad: %s fmt %d size %d count %u | pos desc %d cnt %d type %d frac %d | clr0 %d %d | tex0 %d %d %d %d"
-                       " | pnmtx %d | first bytes %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
-                       data == __gx.fifo_base ? "immediate" : "list", fmt, vertex_size(fmt), count,
-                       __gx.vtx_desc[GX_VA_POS], __gx.vtx_fmt[fmt][GX_VA_POS].cnt, __gx.vtx_fmt[fmt][GX_VA_POS].type,
-                       __gx.vtx_fmt[fmt][GX_VA_POS].frac, __gx.vtx_desc[GX_VA_CLR0],
-                       __gx.vtx_fmt[fmt][GX_VA_CLR0].type, __gx.vtx_desc[GX_VA_TEX0],
-                       __gx.vtx_fmt[fmt][GX_VA_TEX0].cnt, __gx.vtx_fmt[fmt][GX_VA_TEX0].type,
-                       __gx.vtx_fmt[fmt][GX_VA_TEX0].frac, __gx.vtx_desc[GX_VA_PNMTXIDX], data[0], data[1],
-                       data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11]);
-            const float* m = pos_matrix(__gx.current_mtx);
-            __port_log("  mtx %u: %d %d %d %d / %d %d %d %d (x1000); proj %d %d %d %d %d %d", (unsigned)__gx.current_mtx,
-                       (int)(m[0] * 1000), (int)(m[1] * 1000), (int)(m[2] * 1000), (int)(m[3] * 1000),
-                       (int)(m[4] * 1000), (int)(m[5] * 1000), (int)(m[6] * 1000), (int)(m[7] * 1000),
-                       (int)(__gx.projection[1] * 1000), (int)(__gx.projection[2] * 1000),
-                       (int)(__gx.projection[3] * 1000), (int)(__gx.projection[4] * 1000),
-                       (int)(__gx.projection[5] * 1000), (int)(__gx.projection[6] * 1000));
-        }
-    }
     PROF_END(PROF_VERTICES, t_vtx);
-    d.first = vused;
+    d.first = iused;
     d.count = written;
-    vused += written;
+    iused += written;
+    vused += count;
+    d.vertices = vused;
     submit(&d);
 }
 
