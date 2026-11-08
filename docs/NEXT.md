@@ -1,7 +1,8 @@
 Where we are, what comes next
 =============================
 
-Last updated 2026-11-08, at commit aa00d1a. Since 7b8dee4: the generated
+Last updated 2026-11-08, at commit 2240e22 (see item 0 below).
+Before that, at aa00d1a: Since 7b8dee4: the generated
 data units are linked (the script VM crash on the console), draw-done no
 longer waits for a retrace (faster boot). The 3dsx on the console's SD card
 is aa00d1a. Third console run: boot 25-28 frames a second, title screen
@@ -45,13 +46,12 @@ What was done on 2026-11-07, in order:
 Next, in order
 --------------
 
-  0. Battles: 18 game units still fail to compile (146 functions stubbed),
-     nearly all battle code: fight_*.c, fight_menu, fight_gsfloor,
-     wazaSequenceCamera, pokemon_relive, gs_range_801C766C (collision),
-     floor_data, tracefx. Errors: prototype clashes from
-     unify_prototypes.py (too many/few arguments, conflicting types),
-     missing callback typedefs, lvalue casts. Fix these first; the first
-     battle reaches battleCameraWazaInit. The list: build/unified/compile.json.
+  0. (done, 2240e22) All 1,921 units compile; Story Mode reaches the first
+     scene, Outskirt Stand, in Azahar. Next for the field: the ground draws
+     black and there are beige blocks in the sky (fog? texture formats?
+     GXCopyTex?). Then walking, the first dialogue, the first battle.
+     The 3dsx on the console (2240e22) has an empty test script, so it
+     can be played by hand.
   1. (done) Run aa00d1a on the console for two minutes, quit with HOME, fetch
      /colosseum-port.log and any new crash dump. Check:
        - did quitting still crash?
