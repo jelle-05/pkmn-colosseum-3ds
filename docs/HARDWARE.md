@@ -83,3 +83,18 @@ First run, 2026-11-07, New 3DS, build before 7b8dee4:
   - quitting crashed (data abort at 0x10 in hidScanInput, from the retrace
     thread after exit() had closed HID). Fixed in 7b8dee4, not tested on
     the console yet.
+
+Second run, 2026-11-08, build 7b8dee4:
+
+  - title screen at 10.8 frames a second (vertex work 30 ms a frame, from
+    95): the fast mode works.
+  - a data abort in cms_op32_copyStruct (the script VM) reading 0x8DD66E84.
+    Azahar had the same as 49,848 unmapped reads. Cause: the decomp's 43
+    generated data units (script bytecode, battle scripts, messages) were
+    not linked. Fixed in aa00d1a (tools/ppc_data.py).
+  - booting felt slow: every frame waited an extra retrace for the
+    draw-done event. Fixed in aa00d1a; boot frames 27 a second in Azahar,
+    from 18.
+
+After a run, check Azahar's log too: "unmapped" lines are reads that
+would be crashes on the console.

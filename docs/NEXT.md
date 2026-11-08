@@ -1,7 +1,10 @@
 Where we are, what comes next
 =============================
 
-Last updated 2026-11-07, at commit 7b8dee4.
+Last updated 2026-11-08, at commit aa00d1a. Since 7b8dee4: the generated
+data units are linked (the script VM crash on the console), draw-done no
+longer waits for a retrace (faster boot). The 3dsx on the console's SD card
+is aa00d1a and has not been run yet.
 
 
 Where we are
@@ -40,7 +43,7 @@ What was done on 2026-11-07, in order:
 Next, in order
 --------------
 
-  1. Run 7b8dee4 on the console for two minutes, quit with HOME, fetch
+  1. Run aa00d1a on the console for two minutes, quit with HOME, fetch
      /colosseum-port.log and any new crash dump. Check:
        - did quitting still crash?
        - the "prof:" lines: how far did vertex time drop from 95 ms?
