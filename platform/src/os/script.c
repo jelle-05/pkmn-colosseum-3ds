@@ -7,6 +7,7 @@
  *     300 shot                     save the frame as sdmc:/colosseum-shot-00300.bmp
  *     420 press START 10           hold START for 10 frames
  *     600 press A 5
+ *     700 tnl 0                    draw on the CPU path only (1: the shader again)
  *
  * Buttons: A B X Y L R ZL ZR START SELECT UP DOWN LEFT RIGHT (the 3DS's).
  * Held buttons are added to what the controller reads (pad/pad.c), so the
@@ -24,7 +25,8 @@ extern void __port_log(const char* fmt, ...);
 
 typedef struct {
     unsigned frame, length;
-    unsigned keys;          /* 0: screenshot */
+    unsigned keys;          /* 0: screenshot or setting */
+    int tnl;                /* -1, or the transform shader off (0) or on (1) */
 } Event;
 
 static Event events[MAX_EVENTS];
@@ -62,7 +64,10 @@ static void load(void)
         e->frame = frame;
         e->length = length;
         e->keys = 0;
-        if (!strcmp(what, "press")) {
+        e->tnl = -1;
+        if (!strcmp(what, "tnl")) {
+            e->tnl = atoi(button) != 0;
+        } else if (!strcmp(what, "press")) {
             for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++)
                 if (!strcmp(button, buttons[i].name))
                     e->keys = buttons[i].key;
@@ -89,7 +94,10 @@ void __port_script_frame(unsigned frame)
         const Event* e = &events[i];
         if (e->frame != frame)
             continue;
-        if (!e->keys) {
+        if (e->tnl >= 0) {
+            extern int __gx_tnl_enabled;
+            __gx_tnl_enabled = e->tnl;
+        } else if (!e->keys) {
             char path[64];
             snprintf(path, sizeof(path), "sdmc:/colosseum-shot-%05u.bmp", frame);
             host_dump_frame(path);

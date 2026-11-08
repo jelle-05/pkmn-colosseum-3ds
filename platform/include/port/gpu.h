@@ -27,6 +27,27 @@ typedef struct GPU_LE {
 /* An index into the frame's vertex buffer, as the GPU reads it. */
 typedef struct GPU_LE { unsigned short v; } GpuIndex;
 
+/* A vertex for the transform shader (host/tnl.v.pica): the GX vertex
+ * decoded, not transformed. 68 bytes. */
+typedef struct GPU_LE {
+    float pos[4];                   /* model space; w = 3 * position matrix index */
+    float nrm[3];                   /* model space */
+    unsigned char color[4];         /* the vertex's colour 0 */
+    float tc[3][3];                 /* per unit: its texture coordinate source */
+} GpuTnlVertex;
+
+/* The transform shader's uniform block; see host/tnl.v.pica for the
+ * layout. The GX layer sets a bit in dirty for every vec4 it changed, the
+ * host uploads those and clears the bits. */
+#define GPU_TNL_UNIFORMS 91
+#define GPU_TNL_LIGHTS 3
+typedef struct GPU_LE {
+    unsigned int dirty[3];
+    float u[GPU_TNL_UNIFORMS][4];
+} GpuTnlUniforms;
+
+enum { GPU_PROGRAM_CLIP = 0, GPU_PROGRAM_TNL = 1 };
+
 #define GPU_MAX_UNITS 3
 #define GPU_MAX_STAGES 6
 
@@ -53,10 +74,17 @@ typedef struct GPU_LE {
     unsigned char depth_test, depth_func, write_mask, cull;
     unsigned short scissor[4];      /* left, top, right, bottom in 3DS pixels; 0,0,0,0 = off */
     GpuStage stage[GPU_MAX_STAGES];
+    unsigned char program;          /* GPU_PROGRAM_*; with TNL, indices are into the TNL buffer */
+    unsigned char zclamp;           /* TNL: keep depth inside the range (GX clipping off) */
+    unsigned char pad[2];
+    unsigned int ugen;              /* TNL: uniform block generation (last: the host ignores it) */
 } GpuDraw;
 
 /* PICA values used by the GX layer. */
 enum {
+    PICA_TEX_RGBA8 = 0x0, PICA_TEX_RGBA5551 = 0x2, PICA_TEX_RGB565 = 0x3, PICA_TEX_LA8 = 0x5,
+    PICA_TEX_LA4 = 0x9,
+
     PICA_SRC_PRIMARY = 0x0, PICA_SRC_TEX0 = 0x3, PICA_SRC_TEX1 = 0x4, PICA_SRC_TEX2 = 0x5,
     PICA_SRC_CONSTANT = 0xE, PICA_SRC_PREVIOUS = 0xF,
 

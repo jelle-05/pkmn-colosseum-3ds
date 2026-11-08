@@ -1,0 +1,147 @@
+; tnl.v.pica - GX transform, lighting and texture coordinates on the PICA.
+;
+; The GX layer (platform/src/gx/gx_draw.c) decodes the game's vertices on
+; the CPU into this shader's input and fills the uniform block U from the
+; GX state (gx_tnl.c); this shader does what the GameCube's transform unit
+; did. Draws it cannot express (more than three lights, per-vertex texture
+; matrices, ...) take the CPU path and vshader.v.pica instead.
+;
+; U, in vec4s (see platform/src/gx/gx_tnl.c, which fills it):
+;    0..29  position matrices, 3 rows each (GX_PNMTX0..9)
+;   30..59  normal matrices, 3 rows each
+;   60..63  projection, viewport and the screen's tilt, as 4 rows
+;   64..78  three lights, 5 vec4s each: position, direction,
+;           angle attenuation (a0,a1,a2), distance attenuation (k0,k1,k2),
+;           colour (0..1)
+;   79      ambient register colour     80  material register colour
+;   81      per component: material from the vertex colour (1) or register (0)
+;   82      per component: ambient from the vertex colour (1) or register (0)
+;   83      per component: lit (1) or material only (0)
+;   84      diffuse function: (mul, add, min, 0)
+;   85..90  texture coordinate rows, 2 per unit
+;
+; Inputs: v0 position (x, y, z, 3 * matrix index), v1 normal, v2 colour
+; (bytes), v3..v5 the source vector of each texture unit's coordinates.
+
+.fvec U[91]
+
+.constf K0(0.0, 1.0, 0.00392156862, 0.0000001)
+.constf K1(-0.00001, -0.99999, 0.0, 0.0)
+.constf K2(64.0, 69.0, 74.0, 0.0)
+
+.bool zclamp
+
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+
+.alias inpos v0
+.alias innrm v1
+.alias inclr v2
+.alias intc0 v3
+.alias intc1 v4
+.alias intc2 v5
+
+.proc main
+    ; eye position
+    mov r0, inpos
+    mov r0.w, K0.y
+    mova a0.x, inpos.w
+    dp4 r1.x, U[a0.x], r0
+    dp4 r1.y, U[a0.x+1], r0
+    dp4 r1.z, U[a0.x+2], r0
+    mov r1.w, K0.y
+
+    ; clip position (projection, viewport, tilt)
+    dp4 r2.x, U[60], r1
+    dp4 r2.y, U[61], r1
+    dp4 r2.z, U[62], r1
+    dp4 r2.w, U[63], r1
+    ifu zclamp
+        ; with clipping off, keep depth just inside the range
+        mul r3, K1, r2.wwww
+        min r2.z, r3.x, r2.z
+        max r2.z, r3.y, r2.z
+    .end
+    mov outpos, r2
+
+    ; eye normal, normalised
+    dp3 r4.x, U[a0.x+30], innrm
+    dp3 r4.y, U[a0.x+31], innrm
+    dp3 r4.z, U[a0.x+32], innrm
+    dp3 r5.x, r4, r4
+    max r5.x, K0.w, r5.x
+    rsq r5.x, r5.x
+    mul r4, r4, r5.xxxx
+
+    ; lights
+    mov r12, K0.xxxx
+    mova a0.x, K2.x
+    call light
+    mova a0.x, K2.y
+    call light
+    mova a0.x, K2.z
+    call light
+
+    ; channel: material * clamp(ambient + lights)
+    mul r15, K0.zzzz, inclr             ; vertex colour, 0..1
+    add r14, -U[80], r15                ; material
+    mul r14, U[81], r14
+    add r14, U[80], r14
+    add r13, -U[79], r15                ; ambient
+    mul r13, U[82], r13
+    add r13, U[79], r13
+    add r13, r13, r12
+    max r13, K0.xxxx, r13
+    min r13, K0.yyyy, r13
+    add r13, -K0.yyyy, r13              ; lit components: (c - 1) + 1
+    mul r13, U[83], r13
+    add r13, K0.yyyy, r13
+    mul outclr, r14, r13
+
+    ; texture coordinates: two rows per unit on (source, 1)
+    mov r0, intc0
+    mov r0.w, K0.y
+    dp4 outtc0.x, U[85], r0
+    dp4 outtc0.y, U[86], r0
+    mov r0, intc1
+    mov r0.w, K0.y
+    dp4 outtc1.x, U[87], r0
+    dp4 outtc1.y, U[88], r0
+    mov r0, intc2
+    mov r0.w, K0.y
+    dp4 outtc2.x, U[89], r0
+    dp4 outtc2.y, U[90], r0
+    end
+.end
+
+; One light, at U[a0.x]: r1 eye position, r4 eye normal, r12 the running sum.
+.proc light
+    add r6, U[a0.x], -r1                ; to the light
+    dp3 r7.x, r6, r6                    ; d^2
+    rsq r7.y, r7.x                      ; 1/d
+    mul r6, r6, r7.yyyy                 ; normalised
+    mul r7.z, r7.x, r7.y                ; d
+    dp3 r8.x, r4, r6                    ; N.L
+    mul r8.x, U[84].xxxx, r8.x          ; diffuse function: none, sign or clamp
+    add r8.x, U[84].yyyy, r8.x
+    max r8.x, U[84].zzzz, r8.x
+    dp3 r9.x, U[a0.x+1], r6             ; -cos of the angle to the spot direction
+    mov r10.x, K0.y                     ; (1, cos, cos^2)
+    mov r10.y, -r9.x
+    mul r10.z, r9.x, r9.x
+    dp3 r11.x, U[a0.x+2], r10           ; angle attenuation
+    mov r10.y, r7.z                     ; (1, d, d^2)
+    mov r10.z, r7.x
+    dp3 r11.y, U[a0.x+3], r10           ; distance attenuation
+    max r11.x, K0.x, r11.x
+    max r11.y, K0.w, r11.y
+    rcp r11.y, r11.y
+    mul r11.x, r11.x, r11.y
+    mul r8.x, r8.x, r11.x
+    mul r13, U[a0.x+4], r8.xxxx
+    add r12, r12, r13
+.end
+

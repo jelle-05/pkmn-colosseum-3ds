@@ -479,6 +479,8 @@ typedef struct {
     unsigned short tw, th;            /* the PICA texture's (power-of-two) size */
     unsigned bytes;                   /* size of the GX image */
     unsigned char stale;              /* written since decoded (DCFlushRange) */
+    unsigned char pfmt;               /* the PICA texture's format (PICA_TEX_*) */
+    unsigned last_used;               /* frame number, for eviction */
 } TexEntry;
 
 #define TEX_CACHE 1024
@@ -626,30 +628,104 @@ static int decode_texture(const unsigned char* src, int w, int h, int fmt, const
     return 1;
 }
 
-/* RGBA8 rows to the PICA's tiled layout: 8x8 tiles, Morton order inside;
- * texel bytes A, B, G, R. Rows go in as they come: t = 0 is the first. */
-static void upload(unsigned tex, int w, int h, int tw, int th)
+/* The smallest PICA format that holds a GX format exactly (CMPR: once
+ * decoded, whether it has transparent texels). */
+static int pica_format(int fmt, int lut_fmt, int w, int h)
+{
+    switch (fmt) {
+    case 0: case 2: return PICA_TEX_LA4;                   /* I4, IA4 */
+    case 1: case 3: return PICA_TEX_LA8;                   /* I8, IA8 */
+    case 4: return PICA_TEX_RGB565;
+    case 8: case 9: case 10:                               /* C4, C8, C14X2: as the palette */
+        return lut_fmt == 0 ? PICA_TEX_LA8 : lut_fmt == 1 ? PICA_TEX_RGB565 : PICA_TEX_RGBA8;
+    case 14: {                                             /* CMPR: 1-bit alpha at most */
+        const unsigned char* p = decode_buf;
+        for (unsigned i = 0, n = (unsigned)w * h; i < n; i++)
+            if (p[i * 4 + 3] != 255)
+                return PICA_TEX_RGBA5551;
+        return PICA_TEX_RGB565;
+    }
+    default: return PICA_TEX_RGBA8;                        /* RGB5A3, RGBA8 */
+    }
+}
+
+static int pica_bpp(int pfmt)
+{
+    return pfmt == PICA_TEX_RGBA8 ? 4 : pfmt == PICA_TEX_LA4 ? 1 : 2;
+}
+
+/* Decoded RGBA8 rows to the PICA's tiled layout in format pfmt: 8x8 tiles,
+ * Morton order inside, little-endian texels (RGBA8: bytes A, B, G, R). The
+ * PICA's rows run bottom up. */
+static void upload(unsigned tex, int w, int h, int tw, int th, int pfmt)
 {
     unsigned char* dst = host_gpu_tex_data(tex);
     if (!dst)
         return;
-    memset(dst, 0, (unsigned)tw * th * 4);
+    int bpp = pica_bpp(pfmt);
+    memset(dst, 0, (unsigned)tw * th * bpp);
     for (int y = 0; y < h && y < th; y++) {
+        int py = th - 1 - y;
         for (int x = 0; x < w && x < tw; x++) {
-            /* The PICA's texture rows run bottom up: t = 0 is the last row in
-             * memory order of tiles. */
-            int py = th - 1 - y;
             unsigned m = (x & 1) | ((py & 1) << 1) | ((x & 2) << 1) | ((py & 2) << 2) | ((x & 4) << 2) |
                          ((py & 4) << 3);
             unsigned off = ((unsigned)(py >> 3) * (tw >> 3) + (x >> 3)) * 64 + m;
             const unsigned char* s = decode_buf + ((unsigned)y * w + x) * 4;
-            unsigned char* d = dst + off * 4;
-            d[0] = s[3]; d[1] = s[2]; d[2] = s[1]; d[3] = s[0];
+            unsigned char* d = dst + off * bpp;
+            unsigned v;
+            switch (pfmt) {
+            case PICA_TEX_RGB565:
+                v = (unsigned)(s[0] >> 3) << 11 | (unsigned)(s[1] >> 2) << 5 | (s[2] >> 3);
+                d[0] = (unsigned char)v; d[1] = (unsigned char)(v >> 8);
+                break;
+            case PICA_TEX_RGBA5551:
+                v = (unsigned)(s[0] >> 3) << 11 | (unsigned)(s[1] >> 3) << 6 | (unsigned)(s[2] >> 3) << 1 | (s[3] >= 128);
+                d[0] = (unsigned char)v; d[1] = (unsigned char)(v >> 8);
+                break;
+            case PICA_TEX_LA8:
+                d[0] = s[3]; d[1] = s[0];
+                break;
+            case PICA_TEX_LA4:
+                d[0] = (unsigned char)((s[0] & 0xF0) | (s[3] >> 4));
+                break;
+            default:
+                d[0] = s[3]; d[1] = s[2]; d[2] = s[1]; d[3] = s[0];
+                break;
+            }
         }
     }
     host_gpu_tex_upload(tex);
 }
 
+/* Frees the textures no draw used in the last two frames, to make room. */
+void __gx_draw_flush(void);
+static int tex_last_entry;                /* the entry texture() returned last */
+
+static int evict_textures(void)
+{
+    __gx_draw_flush();                    /* the pending draw may use one */
+    __gx.dirty = 1;                       /* draw states hold entries: translate again */
+    unsigned now = __port_frame_number_peek();
+    int kept = 0, freed = 0;
+    for (int i = 0; i < tex_count; i++) {
+        TexEntry* e = &tex_cache[i];
+        if (now - e->last_used > 2) {
+            host_gpu_tex_free(e->tex);
+            freed++;
+            continue;
+        }
+        tex_cache[kept++] = *e;
+    }
+    tex_count = kept;
+    memset(tex_hash, 0, sizeof(tex_hash));
+    for (int i = 0; i < tex_count; i++) {
+        unsigned slot = (((unsigned)tex_cache[i].image >> 5) * 2654435761u) >> (32 - TEX_HASH_BITS);
+        while (tex_hash[slot])
+            slot = (slot + 1) & (TEX_HASH - 1);
+        tex_hash[slot] = (unsigned short)(i + 1);
+    }
+    return freed;
+}
 /* Bytes of a GX image: whole blocks of the format's block size. */
 static unsigned image_bytes(int w, int h, int fmt)
 {
@@ -707,31 +783,53 @@ static unsigned texture(int map, float* ss, float* st, GpuUnit* unit)
             break;
         TexEntry* e = &tex_cache[i];
         if (e->image == image && e->w == w && e->h == h && e->fmt == fmt && e->tlut == lut) {
+            e->last_used = __port_frame_number_peek();
+            tex_last_entry = i;
             *ss = (float)w / e->tw;
             *st = (float)h / e->th;
             if (e->stale) {                 /* the game wrote the image again */
                 e->stale = 0;
+                PROF_BEGIN(t_tex);
                 if (decode_texture(image, w, h, fmt, lut, lut_fmt))
-                    upload(e->tex, w < e->tw ? w : e->tw, h < e->th ? h : e->th, e->tw, e->th);
+                    upload(e->tex, w < e->tw ? w : e->tw, h < e->th ? h : e->th, e->tw, e->th, e->pfmt);
+                PROF_END(PROF_TEX_REDECODE, t_tex);
             }
             return e->tex;
         }
     }
-    if (!image || tex_count >= TEX_CACHE)
+    if (!image)
+        return 0;
+    if (tex_count >= TEX_CACHE && !evict_textures())
         return 0;
     int tw = pot(w), th = pot(h);
-    if (!decode_texture(image, w, h, fmt, lut, lut_fmt))
+    PROF_BEGIN(t_tex);
+    int decoded = decode_texture(image, w, h, fmt, lut, lut_fmt);
+    PROF_END(PROF_TEX_DECODE, t_tex);
+    if (!decoded)
         return 0;
-    unsigned tex = host_gpu_tex_create(tw, th);
-    if (!tex)
+    int pfmt = pica_format(fmt, lut_fmt, w, h);
+    unsigned tex = host_gpu_tex_create(tw, th, pfmt);
+    if (!tex && evict_textures())
+        tex = host_gpu_tex_create(tw, th, pfmt);
+    if (!tex) {
+        static int logged;
+        if (logged++ < 5)
+            __port_log("gx: no texture memory for %dx%d (fmt %d) with %d textures cached", tw, th, fmt, tex_count);
         return 0;
-    upload(tex, w < tw ? w : tw, h < th ? h : th, tw, th);
-    tex_hash[slot] = (unsigned short)(tex_count + 1);
+    }
+    upload(tex, w < tw ? w : tw, h < th ? h : th, tw, th, pfmt);
+    /* Eviction may have rebuilt the hash: find a free slot again. */
+    slot = (((unsigned)image >> 5) * 2654435761u) >> (32 - TEX_HASH_BITS);
+    while (tex_hash[slot])
+        slot = (slot + 1) & (TEX_HASH - 1);    tex_hash[slot] = (unsigned short)(tex_count + 1);
     TexEntry* e = &tex_cache[tex_count++];
     e->image = image; e->tlut = lut; e->w = w; e->h = h; e->fmt = fmt; e->tlut_fmt = lut_fmt;
     e->tex = tex; e->tw = tw; e->th = th;
     e->bytes = image_bytes(w, h, fmt);
     e->stale = 0;
+    e->pfmt = (unsigned char)pfmt;
+    e->last_used = __port_frame_number_peek();
+    tex_last_entry = tex_count - 1;
     if ((unsigned)image < tex_lo) tex_lo = (unsigned)image;
     if ((unsigned)image + e->bytes > tex_hi) tex_hi = (unsigned)image + e->bytes;
     *ss = (float)w / tw;
@@ -1198,6 +1296,12 @@ static GpuVertex* vbuf;
 static GpuIndex* ibuf;
 static unsigned vcap, vused, icap, iused;
 static int warned_full;
+/* The transform shader's buffers (see below, tnl_*). */
+static GpuTnlVertex* tbuf;
+static GpuTnlUniforms* tunif;
+static unsigned tcap, tused, tnl_gen;
+static unsigned tnl_draws, cpu_draws;
+
 
 void __gx_draw_frame_start(void)
 {
@@ -1210,7 +1314,9 @@ void __gx_draw_frame_start(void)
         stat_lit = stat_light_evals = stat_spot = 0;
     if (++frames == 120 && draws_logged < 20) {
         draws_logged++;
-        __port_log("gx: %u triangle vertices per frame", verts / 120);
+        __port_log("gx: %u triangle vertices per frame; draws %u on the shader, %u on the CPU", verts / 120,
+                   tnl_draws / 120, cpu_draws / 120);
+        tnl_draws = cpu_draws = 0;
         frames = verts = 0;
     }
     have_pending = 0;
@@ -1219,8 +1325,11 @@ void __gx_draw_frame_start(void)
         vcap = host_gpu_capacity();
         ibuf = (GpuIndex*)host_gpu_indices();
         icap = host_gpu_index_capacity();
+        tbuf = (GpuTnlVertex*)host_gpu_tnl_vertices();
+        tcap = host_gpu_tnl_capacity();
+        tunif = (GpuTnlUniforms*)host_gpu_tnl_uniforms();
     }
-    vused = iused = 0;
+    vused = iused = tused = 0;
 }
 
 /* One decoded vertex to a GPU vertex: transform, lighting, texture
@@ -1277,6 +1386,211 @@ static void emit(const Vtx* v, GpuVertex* out, const int* unit_coord, const floa
     }
 }
 
+/* ---- the transform shader (host/tnl.v.pica) ------------------------------------
+ * Draws the shader can express keep only the decoding on the CPU: vertices
+ * go out untransformed (GpuTnlVertex), and the GX matrices, lights, channel
+ * registers and texture coordinate rows go into the uniform block, which
+ * only marks the vec4s that changed. Everything else takes the CPU path. */
+
+static float tnl_cur[GPU_TNL_UNIFORMS][4];          /* what the block holds */
+static float tnl_next[GPU_TNL_UNIFORMS][4];
+static int tnl_src[GPU_MAX_UNITS];                 /* per unit: 0 none, 1 position, 2 normal, 4+n texcoord n */
+static float tnl_rows[GPU_MAX_UNITS][2][4];
+int __gx_tnl_enabled = 1;                          /* the script's "tnl 0" turns it off */
+static int tnl_light_ch;                           /* the channel whose lights the shader uses */
+
+static void set4(float* d, float a, float b, float c, float e) { d[0] = a; d[1] = b; d[2] = c; d[3] = e; }
+
+/* Can the shader draw this? Also works out the texture coordinate rows. */
+static int tnl_ready(int units, const int* unit_coord, const float (*scale)[2])
+{
+    for (int i = 0; i < layout_mtx_n; i++)
+        if (layout[i].attr != GX_VA_PNMTXIDX)
+            return 0;                                  /* per-vertex texture matrices */
+    int c0 = __gx.num_chans > 0 && __gx.chan[0].enable, c2 = __gx.num_chans > 0 && __gx.chan[2].enable;
+    if (c0 && c2 && !alpha_shares_color)
+        return 0;
+    tnl_light_ch = c0 ? 0 : 2;
+    if ((c0 || c2) && chan_nlights[tnl_light_ch] > GPU_TNL_LIGHTS)
+        return 0;
+    if ((c0 || c2) && __gx.chan[tnl_light_ch].diff_fn != 0 && __gx.vtx_desc[GX_VA_NRM] == 0)
+        return 0;                                      /* the CPU path lights with (0, 0, 1) */
+    for (int u = 0; u < GPU_MAX_UNITS; u++) {
+        tnl_src[u] = 0;
+        memset(tnl_rows[u], 0, sizeof(tnl_rows[u]));
+        if (u >= units || unit_coord[u] < 0 || unit_coord[u] >= __gx.num_texgens)
+            continue;
+        int i = unit_coord[u], src = __gx.texgen[i].src, func = __gx.texgen[i].func;
+        if (func == 10)
+            return 0;                                  /* GX_TG_SRTG: from the lit colour */
+        tnl_src[u] = src == 0 ? 1 : src == 1 ? 2 : src >= 4 && src <= 11 ? src : 0;
+        float r[2][4];
+        if (func >= 2) {                               /* bump: the source as is */
+            set4(r[0], 1, 0, 0, 0);
+            set4(r[1], 0, 1, 0, 0);
+        } else {
+            const float* m = tex_matrix(__gx.texgen[i].mtx);
+            memcpy(r, m, sizeof(r));
+            if (func == 0) {                           /* GX_TG_MTX3x4: divide by the third row */
+                float c;
+                if (tnl_src[u] >= 4 || tnl_src[u] == 0) {
+                    if (m[8] != 0 || m[9] != 0)
+                        return 0;
+                    c = m[10] + m[11];
+                } else {
+                    if (m[8] != 0 || m[9] != 0 || m[10] != 0)
+                        return 0;
+                    c = m[11];
+                }
+                if (c != 0.0f && c != 1.0f)
+                    for (int k = 0; k < 4; k++) { r[0][k] /= c; r[1][k] /= c; }
+            }
+        }
+        for (int k = 0; k < 4; k++) {
+            tnl_rows[u][0][k] = r[0][k] * scale[u][0];
+            tnl_rows[u][1][k] = r[1][k] * scale[u][1];
+        }
+    }
+    return 1;
+}
+
+/* Fills the uniform block for this draw; flushes the pending draw first
+ * if anything it used changes. */
+static void tnl_commit(int from, int to);
+static int tnl_flushed;                /* this draw already flushed the pending one */
+
+static void tnl_uniforms(void)
+{
+    float (*u)[4] = tnl_next;
+    tnl_flushed = 0;
+    /* The matrices (vec4s 0..59) only when the GX matrices changed. */
+    static float last_pos[sizeof(__gx.pos_mtx) / 4], last_nrm[sizeof(__gx.nrm_mtx) / 4];
+    static int have_mtx;
+    if (!have_mtx || memcmp(last_pos, __gx.pos_mtx, sizeof(last_pos)) || memcmp(last_nrm, __gx.nrm_mtx, sizeof(last_nrm))) {
+        have_mtx = 1;
+        memcpy(last_pos, __gx.pos_mtx, sizeof(last_pos));
+        memcpy(last_nrm, __gx.nrm_mtx, sizeof(last_nrm));
+        for (int i = 0; i < GX_PNMTX_COUNT; i++)
+            for (int r = 0; r < 3; r++) {
+                memcpy(u[i * 3 + r], __gx.pos_mtx[i][r], 16);
+                set4(u[30 + i * 3 + r], __gx.nrm_mtx[i][r][0], __gx.nrm_mtx[i][r][1], __gx.nrm_mtx[i][r][2], 0);
+            }
+        tnl_commit(0, 60);
+    }
+    /* Clip = projection; then the viewport (x' = ax*x + bx*w, ...); then the
+     * tilt into the portrait framebuffer (x'' = y', y'' = -x'). */
+    const float* p = __gx.projection;
+    float X[4], Y[4], Z[4], W[4];
+    if (p[0] == (float)GXENUM_PERSPECTIVE) {
+        set4(X, p[1], 0, p[2], 0); set4(Y, 0, p[3], p[4], 0); set4(Z, 0, 0, p[5], p[6]); set4(W, 0, 0, -1, 0);
+    } else {
+        set4(X, p[1], 0, 0, p[2]); set4(Y, 0, p[3], 0, p[4]); set4(Z, 0, 0, p[5], p[6]); set4(W, 0, 0, 0, 1);
+    }
+    for (int k = 0; k < 4; k++) {
+        float x = vp_ax * X[k] + vp_bx * W[k], y = vp_ay * Y[k] + vp_by * W[k];
+        u[60][k] = y;
+        u[61][k] = -x;
+        u[62][k] = Z[k];
+        u[63][k] = W[k];
+    }
+    int lit = __gx.num_chans > 0 && (__gx.chan[0].enable || __gx.chan[2].enable);
+    int spot = lit && __gx.chan[tnl_light_ch].attn_fn == 1;
+    for (int j = 0; j < GPU_TNL_LIGHTS; j++) {
+        float* L = u[64 + 5 * j];
+        if (lit && j < chan_nlights[tnl_light_ch]) {
+            const LightPre* l = &lights[chan_lights[tnl_light_ch][j]];
+            set4(L, l->pos[0], l->pos[1], l->pos[2], 0);
+            set4(L + 4, l->dir[0], l->dir[1], l->dir[2], 0);
+            if (spot) {
+                set4(L + 8, l->a[0], l->a[1], l->a[2], 0);
+                set4(L + 12, l->k[0], l->k[1], l->k[2], 0);
+            } else {
+                set4(L + 8, 1, 0, 0, 0);
+                set4(L + 12, 1, 0, 0, 0);
+            }
+            set4(L + 16, l->col[0] / 255.0f, l->col[1] / 255.0f, l->col[2] / 255.0f, l->col[3] / 255.0f);
+        } else {
+            memset(L, 0, 20 * sizeof(float));
+            L[8] = L[12] = 1;
+        }
+    }
+    const unsigned char* amb = (const unsigned char*)&__gx.chan_amb[0];
+    const unsigned char* mat = (const unsigned char*)&__gx.chan_mat[0];
+    int has_clr = __gx.vtx_desc[GX_VA_CLR0] != 0;
+    if (__gx.num_chans > 0) {
+        set4(u[79], amb[0] / 255.0f, amb[1] / 255.0f, amb[2] / 255.0f, amb[3] / 255.0f);
+        set4(u[80], mat[0] / 255.0f, mat[1] / 255.0f, mat[2] / 255.0f, mat[3] / 255.0f);
+        float mc = __gx.chan[0].mat_src && has_clr, ma = __gx.chan[2].mat_src && has_clr;
+        float ac = __gx.chan[0].amb_src && has_clr, aa = __gx.chan[2].amb_src && has_clr;
+        set4(u[81], mc, mc, mc, ma);
+        set4(u[82], ac, ac, ac, aa);
+        float lc = __gx.chan[0].enable ? 1 : 0, la = __gx.chan[2].enable ? 1 : 0;
+        set4(u[83], lc, lc, lc, la);
+    } else {                                           /* no channels: white */
+        set4(u[79], 0, 0, 0, 0);
+        set4(u[80], 1, 1, 1, 1);
+        set4(u[81], 0, 0, 0, 0);
+        set4(u[82], 0, 0, 0, 0);
+        set4(u[83], 0, 0, 0, 0);
+    }
+    int df = lit ? __gx.chan[tnl_light_ch].diff_fn : 0;
+    if (df == 0) set4(u[84], 0, 1, -1e30f, 0);          /* GX_DF_NONE */
+    else if (df == 2) set4(u[84], 1, 0, 0, 0);          /* GX_DF_CLAMP */
+    else set4(u[84], 1, 0, -1e30f, 0);                  /* GX_DF_SIGN */
+    for (int k = 0; k < GPU_MAX_UNITS; k++) {
+        memcpy(u[85 + 2 * k], tnl_rows[k][0], 16);
+        memcpy(u[86 + 2 * k], tnl_rows[k][1], 16);
+    }
+
+    tnl_commit(60, GPU_TNL_UNIFORMS);
+}
+
+/* Copies the vec4s in [from, to) that changed into the block, first
+ * flushing the pending draw, which still needs the old ones. */
+static void tnl_commit(int from, int to)
+{
+    for (int i = from; i < to; i++) {
+        if (memcmp(tnl_cur[i], tnl_next[i], 16) == 0)
+            continue;
+        if (!tnl_flushed) {
+            __gx_draw_flush();
+            tnl_gen++;
+            tnl_flushed = 1;
+        }
+        memcpy(tnl_cur[i], tnl_next[i], 16);
+        for (int k = 0; k < 4; k++)
+            tunif->u[i][k] = tnl_next[i][k];
+        tunif->dirty[i / 32] |= 1u << (i % 32);
+    }
+}
+
+/* One decoded vertex, as the shader takes it. */
+static void tnl_vertex(const Vtx* v, GpuTnlVertex* o)
+{
+    unsigned mid = v->has_pnmtx ? v->pnmtx : (__gx.current_mtx & 0xFF);
+    unsigned m = mid / 3;
+    o->pos[0] = v->pos[0];
+    o->pos[1] = v->pos[1];
+    o->pos[2] = v->pos[2];
+    o->pos[3] = (float)((m < GX_PNMTX_COUNT ? m : 0) * 3);
+    if (v->has_nrm) {
+        o->nrm[0] = v->nrm[0]; o->nrm[1] = v->nrm[1]; o->nrm[2] = v->nrm[2];
+    } else {
+        o->nrm[0] = 0; o->nrm[1] = 0; o->nrm[2] = 1;
+    }
+    if (v->has_clr[0])
+        memcpy(o->color, v->clr[0], 4);
+    else
+        memset(o->color, 255, 4);
+    for (int u = 0; u < GPU_MAX_UNITS; u++) {
+        int s = tnl_src[u];
+        float a = 0, b = 0, c = 1;
+        if (s == 1) { a = v->pos[0]; b = v->pos[1]; c = v->pos[2]; }
+        else if (s == 2) { a = v->nrm[0]; b = v->nrm[1]; c = v->nrm[2]; }
+        else if (s >= 4 && v->has_tex[s - 4]) { a = v->tex[s - 4][0]; b = v->tex[s - 4][1]; }
+        o->tc[u][0] = a; o->tc[u][1] = b; o->tc[u][2] = c;
+    }
+}
 /* Draws `count` vertices of primitive `prim` read from `data`. */
 static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
 {
@@ -1292,7 +1606,7 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
     /* The draw state, translated again only when a GX setter changed it
      * (matrix loads do not count, gx_state.c). */
     static GpuDraw d;
-    static int unit_coord[GPU_MAX_UNITS], units, translated;
+    static int unit_coord[GPU_MAX_UNITS], units, translated, unit_entry[GPU_MAX_UNITS];
     static float scale[GPU_MAX_UNITS][2];
     if (__gx.dirty || !translated) {
         __gx.dirty = 0;
@@ -1323,6 +1637,7 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
                 if (!tex)
                     continue;
                 d.unit[u].tex = tex;
+                unit_entry[u] = tex_last_entry;
                 unit_map[u] = map;
                 unit_coord[u] = coord;
                 units++;
@@ -1332,27 +1647,43 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
         combiners(&d);
         pixel_state(&d);
         log_tev(units, unit_map);
+    } else {
+        unsigned now = __port_frame_number_peek();      /* the textures are still in use */
+        for (int u = 0; u < units; u++)
+            tex_cache[unit_entry[u]].last_used = now;
     }
     layout_setup(fmt);
     emit_setup(units, unit_coord);
+    int tnl = __gx_tnl_enabled && tnl_ready(units, unit_coord, (const float(*)[2])scale);
 
     /* Triangles from the primitive, decoded a vertex at a time. */
     const unsigned char* p = data;
     unsigned tris = prim == GX_QUADS ? count / 4 * 2 : prim == GX_TRIANGLES ? count / 3 : count - 2;
     unsigned need = tris * 3;
-    if (vused + count > vcap || iused + need > icap) {
+    if ((tnl ? tused + count > tcap : vused + count > vcap) || iused + need > icap) {
         if (!warned_full++)
             __port_log("gx: vertex buffer full (%u)", vcap);
         return;
     }
-    /* Every vertex is transformed and stored once; the triangles are
-     * indices into them. */
-    GpuVertex* out = vbuf + vused;
+    /* Every vertex is stored once; the triangles are indices into them. */
     GpuIndex* idx = ibuf + iused;
     PROF_BEGIN(t_vtx);
-    unsigned base = vused, written = 0;
-    /* In chunks, so decoding and transforming can be timed apart. */
+    unsigned base = tnl ? tused : vused, written = 0;
     static Vtx vb[64];
+    if (tnl) {
+        tnl_draws++;
+        tnl_uniforms();
+        GpuTnlVertex* tout = tbuf + tused;
+        PROF_BEGIN(t_dec);
+        for (unsigned i = 0; i < count; i++) {
+            read_vertex(&p, fmt, &vb[0]);
+            tnl_vertex(&vb[0], &tout[i]);
+        }
+        PROF_END(PROF_VTX_DECODE, t_dec);
+    } else {
+    cpu_draws++;
+    GpuVertex* out = vbuf + vused;
+    /* In chunks, so decoding and transforming can be timed apart. */
     for (unsigned i = 0; i < count;) {
         unsigned n = count - i < 64 ? count - i : 64;
         PROF_BEGIN(t_dec);
@@ -1364,6 +1695,7 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
             emit(&vb[k], &out[i + k], unit_coord, (const float(*)[2])scale);
         PROF_END(emit_light ? PROF_VTX_LIT : PROF_VTX_UNLIT, t_emit);
         i += n;
+    }
     }
     switch (prim) {
     case GX_QUADS:
@@ -1394,35 +1726,20 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
         }
         break;
     }
-    /* Bring-up aid: the first draw whose x is not finite, in detail. */
-    static int badx_logged;
-    if (written && badx_logged < 2 && !(fabsf(out[0].pos[0] / out[0].pos[3]) < 1e6f)) {
-        badx_logged++;
-        const unsigned char* q = data;
-        Vtx v0;
-        layout_setup(fmt);
-        read_vertex(&q, fmt, &v0);
-        unsigned mid = v0.has_pnmtx ? v0.pnmtx : (__gx.current_mtx & 0xFF);
-        const float* m = pos_matrix(mid);
-        __port_log("bad x: pos %d %d %d (x1000) pnmtx %d/%u fmt %d pos cnt %d type %d frac %d desc %d; clip %d %d %d %d",
-                   (int)(v0.pos[0] * 1000), (int)(v0.pos[1] * 1000), (int)(v0.pos[2] * 1000), v0.has_pnmtx, mid, fmt,
-                   __gx.vtx_fmt[fmt][GX_VA_POS].cnt, __gx.vtx_fmt[fmt][GX_VA_POS].type,
-                   __gx.vtx_fmt[fmt][GX_VA_POS].frac, __gx.vtx_desc[GX_VA_POS], (int)out[0].pos[0], (int)out[0].pos[1],
-                   (int)out[0].pos[2], (int)out[0].pos[3]);
-        for (int r = 0; r < 3; r++)
-            __port_log("  mtx row %d: %d %d %d %d (x1000)", r, (int)(m[r * 4] * 1000), (int)(m[r * 4 + 1] * 1000),
-                       (int)(m[r * 4 + 2] * 1000), (int)(m[r * 4 + 3] * 1000));
-        __port_log("  proj %d: %d %d %d %d %d %d (x1000); viewport %d %d %d %d", (int)__gx.projection[0],
-                   (int)(__gx.projection[1] * 1000), (int)(__gx.projection[2] * 1000), (int)(__gx.projection[3] * 1000),
-                   (int)(__gx.projection[4] * 1000), (int)(__gx.projection[5] * 1000), (int)(__gx.projection[6] * 1000),
-                   (int)__gx.viewport[0], (int)__gx.viewport[1], (int)__gx.viewport[2], (int)__gx.viewport[3]);
-    }
     PROF_END(PROF_VERTICES, t_vtx);
     d.first = iused;
     d.count = written;
     iused += written;
-    vused += count;
-    d.vertices = vused;
+    d.program = tnl ? GPU_PROGRAM_TNL : GPU_PROGRAM_CLIP;
+    d.zclamp = tnl && __gx.clip_mode == 1;
+    d.ugen = tnl ? tnl_gen : 0;
+    if (tnl) {
+        tused += count;
+        d.vertices = tused;
+    } else {
+        vused += count;
+        d.vertices = vused;
+    }
     submit(&d);
 }
 
