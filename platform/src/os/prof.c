@@ -28,6 +28,29 @@ void __prof_add(int slot, long long ticks)
     count[slot]++;
 }
 
+/* Where the main thread blocks (other than the retrace wait), by caller. */
+#define WAIT_SITES 8
+static struct { void* from; long long ticks; unsigned n; } waits[WAIT_SITES];
+
+void __prof_wait(void* from, long long ticks)
+{
+    int free_slot = -1;
+    for (int i = 0; i < WAIT_SITES; i++) {
+        if (waits[i].from == from) {
+            waits[i].ticks += ticks;
+            waits[i].n++;
+            return;
+        }
+        if (!waits[i].from && free_slot < 0)
+            free_slot = i;
+    }
+    if (free_slot >= 0) {
+        waits[free_slot].from = from;
+        waits[free_slot].ticks = ticks;
+        waits[free_slot].n = 1;
+    }
+}
+
 void __prof_frame(void)
 {
     long long now = OSGetTime();
@@ -46,6 +69,14 @@ void __prof_frame(void)
                    count[i]);
         total[i] = 0;
         count[i] = 0;
+    }
+    for (int i = 0; i < WAIT_SITES; i++) {
+        if (!waits[i].from)
+            continue;
+        long long per = waits[i].ticks * 1000 / frames / 40500;
+        __port_log("  main blocked at %p: %d.%d ms/frame (%u times)", waits[i].from, (int)(per / 1000),
+                   (int)(per % 1000 / 100), waits[i].n);
+        waits[i].from = 0;
     }
     frames = 0;
     window_start = now;

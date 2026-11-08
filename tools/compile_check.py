@@ -42,11 +42,18 @@ BIG_ENDIAN = True
 ARCH_LE = ["-march=armv6k", "-mtune=mpcore", "-mfloat-abi=hard", "-mtp=soft"]
 ARCH = ARCH_LE + (["-mbig-endian"] if BIG_ENDIAN else [])
 
-# Optimisation. The game stays at -O1: at -O2 it hangs a few frames in,
-# most likely in a busy-wait on a variable that is not volatile, which -O2
-# turns into an endless loop (MWCC built many units at level 0). The
-# platform layer, which is ours, uses OPT_PLATFORM.
-OPT = "-O1"
+# Optimisation. The game is built at -O2 without GCC's own inlining of
+# functions not declared inline. The game polls state that interrupts and
+# other threads change, through small accessor functions:
+#     while (fn_801808B4(entry)) {}       /* ARAM copy done? */
+# Inlined, such a loop has no call left and GCC reads the field once: at
+# plain -O2 the game hung in its first ARAM copy (fn_80180450). MWCC did not
+# hoist those loads. Also off: paths that dereference null become traps
+# (the decomp passes null on purpose), interprocedural register allocation
+# (the coroutine switch) and merging identical functions (callbacks are
+# compared by address).
+OPT = ("-O2 -fno-inline-small-functions -fno-inline-functions -fno-isolate-erroneous-paths-dereference"
+       " -fno-ipa-ra -fno-ipa-icf")
 OPT_PLATFORM = "-O2"
 
 # Language semantics that must match MWCC's C89-era behaviour, for every

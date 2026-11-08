@@ -18,6 +18,7 @@
  * all others, so it runs exactly when every game thread is waiting. The game
  * uses it for background tasks in a loop that never yields.
  */
+#include "port/prof.h"
 #include <string.h>
 
 #include "os_thread.h"
@@ -141,7 +142,10 @@ static void block(PortThread* t)
         __port_irq_drop(t);
     }
     set_state(t, OS_THREAD_STATE_WAITING);
+    long long t0 = __prof_now();
     host_event_wait(&t->wake);
+    if (t->thread == 0)                              /* the main thread */
+        __prof_wait(t->wait_from, __prof_now() - t0);
     set_state(t, OS_THREAD_STATE_RUNNING);
     if (had) {
         __port_irq_take(t, __builtin_return_address(0));
@@ -174,8 +178,10 @@ void __port_thread_dump(void)
     extern volatile int __port_irq_state;
     extern void* volatile __port_irq_handler;
     extern volatile unsigned __port_irq_posted, __port_irq_run, __port_irq_takes;
-    __port_log("  irq thread: state %d, handler %p, posted %u, run %u; lock taken %u times",
-               __port_irq_state, __port_irq_handler, __port_irq_posted, __port_irq_run, __port_irq_takes);
+    extern volatile unsigned __port_irq_takes_main, __port_irq_takes_raised;
+    __port_log("  irq thread: state %d, handler %p, posted %u, run %u; lock taken %u times (%u by main, %u raised)",
+               __port_irq_state, __port_irq_handler, __port_irq_posted, __port_irq_run, __port_irq_takes,
+               __port_irq_takes_main, __port_irq_takes_raised);
     PortThread* owner = __port_irq_owner;
     __port_log("  interrupts off: %s %p (taken at %p)", owner ? "thread" : "nobody",
                owner ? owner->os_thread : 0, __port_irq_taken_at);
@@ -390,7 +396,10 @@ void OSYieldThread(void)
     if (had) {
         __port_irq_drop(t);
     }
+    long long t0 = __prof_now();
     host_sleep_us(0);
+    if (t->thread == 0)
+        __prof_wait(__builtin_return_address(0), __prof_now() - t0);
     if (had) {
         __port_irq_take(t, __builtin_return_address(0));
     }

@@ -32,3 +32,7 @@ gfxSetOrtho
 # a fade hook (game_patch/gs_float_passthrough.c).
 fn_800E0718
 fadeEffectHookFunction_carde
+
+# gs_gapp.c: the idle function, taking the interrupt lock only when there is
+# something to merge (game_patch/gs_gapp_idle.c).
+gappBackgroundCallback

@@ -191,6 +191,7 @@ void __port_irq_init(void)
  * The lock is the owner word, taken by compare-and-swap. */
 
 volatile unsigned __port_irq_takes;   /* for the heartbeat */
+volatile unsigned __port_irq_takes_main, __port_irq_takes_raised;
 
 void __port_irq_take(PortThread* t, void* where)
 {
@@ -214,6 +215,10 @@ void __port_irq_take(PortThread* t, void* where)
     t->irq_off = 1;
     __port_irq_taken_at = where;
     __port_irq_takes++;
+    if (t->thread == 0)
+        __port_irq_takes_main++;
+    if (raise)
+        __port_irq_takes_raised++;
 }
 
 void __port_irq_drop(PortThread* t)

@@ -99,6 +99,8 @@ def main():
                          "e.g. '300 shot;420 press START 10'; screenshots go to build/shots")
     ap.add_argument("--cmd", action="append", default=[],
                     help="with --gdb: extra gdb commands at the stop")
+    ap.add_argument("--interrupt", type=int, default=0,
+                    help="with --gdb: run this many seconds, then stop wherever the threads are (for hangs)")
     ap.add_argument("--cond", default=None, help="with --gdb: condition for the stop, e.g. '$r3 < 0x1000'")
     ap.add_argument("--skip", type=int, default=0,
                     help="with --gdb: let this many heartbeats pass first")
@@ -137,7 +139,10 @@ def main():
                 # are reliable; they are resolved against both images.
                 cmds = ["set pagination off", "set confirm off", f"file {elf.as_posix()}",
                         "target remote localhost:24689", "break *0x0", "delete",
-                        f"break *{heartbeat_address(image, tools, args.brk)}" + (f" if {args.cond}" if args.cond else ""), f"ignore $bpnum {args.skip}", "continue",
+                        *(["continue &", f"shell ping -n {args.interrupt + 1} 127.0.0.1 > nul", "interrupt",
+                           "shell ping -n 3 127.0.0.1 > nul"] if args.interrupt else
+                          [f"break *{heartbeat_address(image, tools, args.brk)}" + (f" if {args.cond}" if args.cond else ""),
+                           f"ignore $bpnum {args.skip}", "continue"]),
                         *[f"x/1xw {symbol_address(image, tools, s)}" for s in args.show], *args.cmd,
                         "info threads", "thread apply all info registers pc lr sp",
                         "thread apply all x/48xw $sp", "detach"]
