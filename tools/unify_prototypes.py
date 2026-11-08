@@ -82,6 +82,8 @@ DECL = re.compile(
     r"\((?P<params>[^()]*(?:\([^()]*\)[^()]*)*)\)\s*(?P<attr>(?:__attribute__\s*\(\(.*\)\)\s*)*)$",
     re.S)
 TYPEDEF = re.compile(r"\btypedef\s+([^;{}()]+?)\s+(\w+)\s*;")
+# typedef R (*Name)(...);  -- a function-pointer type
+FNPTR_TYPEDEF = re.compile(r"\btypedef\b[^;{}]*?\(\s*\*\s*(\w+)\s*\)\s*\(")
 IDENT = re.compile(r"[A-Za-z_]\w*")
 STORAGE = re.compile(r"\b(extern|static|inline|__inline__|__inline|register|const|volatile)\b")
 
@@ -507,6 +509,42 @@ def strip_asm_functions(text, unit, stats):
     return "".join(out)
 
 
+# `(u8*)p += n;` -- MWCC (like old GCC) accepted a cast as an lvalue.
+CAST_LVALUE = re.compile(r"(?<![\w)\]])\(\s*((?:const\s+|volatile\s+)*[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*\s*\*+)\s*\)"
+                         r"\s*([A-Za-z_]\w*)\s*(\+|-)=\s*([^;]+);")
+
+
+def cast_lvalues(text, stats):
+    """`(T*)p += n;` -> `p = (void*)((T*)p + n);`, which is what MWCC did."""
+    def sub(m):
+        stats["cast_lvalues"] = stats.get("cast_lvalues", 0) + 1
+        return f"{m.group(2)} = (void*)(({m.group(1)}){m.group(2)} {m.group(3)} ({m.group(4)}));"
+    return CAST_LVALUE.sub(sub, text)
+
+
+def load_fixups(path):
+    """platform/fixups.txt -> [(old, new, line)]: textual fixes for calls whose
+    meaning came from the PowerPC register assignment (see the file)."""
+    out, old = [], None
+    if not path.is_file():
+        return out
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.startswith("- "):
+            old = (line[2:], n)
+        elif line.startswith("+ ") and old:
+            out.append((old[0], line[2:], old[1]))
+            old = None
+    return out
+
+
+def apply_fixups(text, fixups, used):
+    for old, new, n in fixups:
+        if old in text:
+            text = text.replace(old, new)
+            used.add(n)
+    return text
+
+
 def strip_extern_c(text):
     """Remove `extern "C" { ... }` wrappers. A few units are C files that
     MWCC compiled as C++ only to get C++'s .bss ordering."""
@@ -641,10 +679,14 @@ def rewrite_unit(u, text, defs, stats):
                     file_typedef_at.setdefault(name, s)
             continue
         m = TYPEDEF.search(h + ";")
-        if m:
-            type_names.add(m.group(2))
+        name = m.group(2) if m else None
+        if not m:
+            m = FNPTR_TYPEDEF.search(h)
+            name = m.group(1) if m else None
+        if name:
+            type_names.add(name)
             if depth == 0:
-                file_typedef_at.setdefault(m.group(2), s)
+                file_typedef_at.setdefault(name, s)
 
     def hoistable(head, top):
         for ident in IDENT.findall(PP_LINE.sub(" ", head)):
@@ -719,7 +761,9 @@ def rewrite_unit(u, text, defs, stats):
         for x in xs:
             if x[6] != "decl" or name in static_defs:
                 continue
-            if x[3] == primary and (x[4] == 0 or pdepth != 0 or x is xs[0]):
+            # A block-scope repeat of a block-scope primary is a distinct
+            # declaration to GCC when its types are local to the block.
+            if x[3] == primary and (x[4] == 0 or x is xs[0]):
                 continue
             if x[4] == 0 and x[3] in shared:
                 alias_of[x[0]] = shared[x[3]]
@@ -815,8 +859,20 @@ def rewrite_unit(u, text, defs, stats):
     # 4. Walk tokens, keep track of the visible declaration per name, rename
     # uses. A use with no visible declaration is an implicit declaration
     # (int f()); give it its own view so a later declaration cannot clash.
-    events = sorted(((hoist.get(x[0], x[1]), x[2], x[0], x[4] == 0) for x in decls
-                     if x[6] == "decl"), key=lambda t: t[0])
+    # A hoisted block-scope declaration stays what it was in its own block,
+    # and for the rest of the file only fills in where nothing else is
+    # declared (MWCC: no implicit int there). It never hides a file-scope
+    # declaration from later functions.
+    events = []
+    for x in decls:
+        if x[6] != "decl":
+            continue
+        if x[0] in hoist:
+            events.append((hoist[x[0]], x[2], x[0], "fill"))
+            events.append((x[1], x[2], x[0], "block"))
+        else:
+            events.append((x[1], x[2], x[0], "file" if x[4] == 0 else "block"))
+    events.sort(key=lambda t: t[0])
     ins_points = sorted(inserts)
     ii = 0
     def_events = sorted(((x[1], x[2]) for x in decls if x[6] == "def"), key=lambda t: t[0])
@@ -834,6 +890,7 @@ def rewrite_unit(u, text, defs, stats):
     ev = 0
     dv = 0
     toks = list(tokens(text))
+    close_at = Counter()        # token index -> cast wrappers that end there
     i = 0
     starts = sorted(plan)
     pi = 0
@@ -847,11 +904,17 @@ def rewrite_unit(u, text, defs, stats):
             out.append(" ".join(t for t in inserts[at] if t) + " ")
             ii += 1
         while ev < len(events) and events[ev][0] <= s:
-            end, name, start, filescope = events[ev]
-            # File-scope (and hoisted) declarations are visible in all open
-            # scopes; the rest only in the current block.
-            for sc in (scope if filescope else scope[-1:]):
-                sc[name] = start
+            end, name, start, mode = events[ev]
+            # File-scope declarations are visible in all open scopes, block
+            # ones in the current block; hoisted ones fill gaps.
+            if mode == "file":
+                for sc in scope:
+                    sc[name] = start
+            elif mode == "fill":
+                for sc in scope:
+                    sc.setdefault(name, start)
+            else:
+                scope[-1][name] = start
             ev += 1
         while dv < len(def_events) and def_events[dv][0] <= s:
             scope[0][def_events[dv][1]] = "def"
@@ -911,19 +974,27 @@ def rewrite_unit(u, text, defs, stats):
                                     break
                             j += 1
                         if j < len(toks):
+                            # The arguments are walked like any other
+                            # tokens (calls inside them need renaming too);
+                            # the cast's ')' goes after the call's.
                             out.append(text[pos:s])
                             out.append(f"(({pl['cast']}){pl['raw']}")
-                            out.append(text[e:toks[j][3]])
-                            out.append(")")
-                            pos = toks[j][3]
-                            i = j + 1
+                            pos = e
+                            close_at[j] += 1
+                            i += 1
                             stats["calls_cast"] += 1
                             continue
+                    if pl and pl["cast"]:
+                        target = pl["raw"]         # its address: the raw view
                     if target != val:
                         out.append(text[pos:s])
                         out.append(target)
                         pos = e
                         stats["uses_renamed"] += 1
+        if close_at.get(i):
+            out.append(text[pos:e])
+            out.append(")" * close_at.pop(i))
+            pos = e
         i += 1
     out.append(text[pos:])
     prelude = "".join(f'extern int {n}__pvi() __asm__("{n}");\n' for n in sorted(implicit))
@@ -1171,7 +1242,10 @@ def main():
     load_replaced(ROOT / "platform" / "replace.txt")
     data_types = load_data_types(ROOT / "platform" / "data_types.generated.txt")
     data_types.update(load_data_types(ROOT / "platform" / "data_types.txt"))
+    fixups = load_fixups(ROOT / "platform" / "fixups.txt")
+    fixups_used = set()
     for u, text in work:
+        text = cast_lvalues(apply_fixups(text, fixups, fixups_used), stats)
         pre = rewrite_ppc_varargs(strip_asm_functions(strip_extern_c(text), u, stats), u, stats)
         new = rewrite_unit(u, pre, defs, stats)
         new = redirect_fixed_addresses(new, stats)
@@ -1219,6 +1293,10 @@ def main():
     print(f"big-endian data objects retyped (platform/data_types.txt): {stats['data_retyped']}"
           f" ({stats.get('pointer_fields_split', 0)} layout fields split a pointer word, left alone)")
     print(f"bitfield runs given MWCC bit order: {stats.get('bitfield_runs', 0)}")
+    print(f"casts used as lvalues rewritten: {stats.get('cast_lvalues', 0)}")
+    unused = [n for _, _, n in fixups if n not in fixups_used]
+    print(f"fixups applied (platform/fixups.txt): {len(fixups) - len(unused)}"
+          + (f"; NOT found, lines: {', '.join(map(str, unused))}" if unused and not args.only else ""))
     print(f"GameCube pointer-range checks turned into null checks: {stats.get('gc_pointer_checks', 0)}")
     missing = REPLACED - stats["replaced"]
     print(f"functions replaced (platform/replace.txt): {len(stats['replaced'])}"

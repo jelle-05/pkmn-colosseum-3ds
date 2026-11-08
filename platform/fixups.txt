@@ -1,0 +1,31 @@
+# Textual fixes applied by tools/unify_prototypes.py to the preprocessed game
+# units, before anything else. Each fix is a "- old" line and a "+ new"
+# line; the old text is replaced wherever it occurs (it must occur
+# somewhere, or the tool reports it).
+#
+# They are for calls whose meaning came from the PowerPC register
+# assignment. A K&R declaration `extern void f();` lets the decomp pass
+# arguments in any order: on the GameCube integers and pointers go in
+# r3-r10 and floats in f1-f8, each in their own order. Once the call has a
+# prototype (the float-ABI fix gives it the definition's), the arguments
+# have to be in the definition's order. A missing float argument that the
+# callee reads from a register the caller never set is passed as the value
+# the callee would have ignored.
+
+# gs_range_801C766C.c: colsysWallSweep(Vec3f* start, Vec3f* end, f32 radius,
+# Vec3f* result). The float goes in f1 (radius), the 0 in r5 (result).
+- colsysWallSweep(center, &entry->pos, 0, lbl_8047E118)
++ colsysWallSweep(center, &entry->pos, lbl_8047E118, 0)
+
+# fight_out_pokemon_suffix_80207C6C.c: fn_801DA2C4(void* effect, f32 radius,
+# f32 t) does not read radius or t; the caller never sets f1/f2.
+- fn_801DA2C4(iVar1);
++ fn_801DA2C4(iVar1, 0.0f, 0.0f);
+
+# pokemon_relive.c: GSvec::set(f32, f32, f32), `this` in r3; sv1 is a float.
+- set__5GSvecFfff(sv1, out_buf, sv2, sv3)
++ set__5GSvecFfff(out_buf, sv1, sv2, sv3)
+
+# pokemon_relive.c: pokemonSetDp(u8* ptr, f32 f1); the double goes in f1.
+- pokemonSetDp((double)lbl_8047E688,uVar1)
++ pokemonSetDp(uVar1,(double)lbl_8047E688)
