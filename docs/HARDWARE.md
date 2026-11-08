@@ -96,5 +96,10 @@ Second run, 2026-11-08, build 7b8dee4:
     draw-done event. Fixed in aa00d1a; boot frames 27 a second in Azahar,
     from 18.
 
+Third run, 2026-11-08, build aa00d1a: boot 25-28 frames a second, title
+screen 13-14, main menu 20, no data aborts. Reached a battle and stopped
+at the stub battleCameraWazaInit (a Luma dump with exception type 2 and
+"port: <name>" on the stack is a stub, not a crash).
+
 After a run, check Azahar's log too: "unmapped" lines are reads that
 would be crashes on the console.
