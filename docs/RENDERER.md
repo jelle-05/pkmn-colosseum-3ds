@@ -10,56 +10,76 @@ terms (platform/src/gx/gx_state.c) and draws in platform/src/gx/gx_draw.c:
     (GXCallDisplayList; the game's files, read as they are in big-endian
     mode). Direct and indexed attributes, all component types, matrix
     indices per vertex, and indexed matrix loads in display lists.
-  - The transform runs on the CPU: position and normal matrices,
-    projection, viewport, the two lighting channels (ambient, material,
-    diffuse and spot/distance attenuation), and texture coordinate
-    generation with texture matrices. Primitives become triangle lists.
+  - Each GX vertex is decoded once and stored once; quads, strips and fans
+    become 16-bit indices into the frame's vertex buffer.
+  - Transform and lighting, two ways:
+      - the transform shader (platform/host/tnl.v.pica), for every draw it
+        can express: the CPU only decodes vertices (GpuTnlVertex: model
+        position with its matrix index, normal, colour, and per texture
+        unit its coordinate source), and the GX matrices, lights, channel
+        registers and texture coordinate rows go into a uniform block
+        (GpuTnlUniforms, filled by tnl_uniforms() in gx_draw.c);
+      - the CPU path, for the rest (more than three lights, colour and
+        alpha channels with different lights, per-vertex texture
+        matrices, SRTG texture coordinates): emit() in gx_draw.c
+        transforms and lights on the CPU, and vshader.v.pica only rotates
+        the result into the framebuffer.
+    The test script's "N tnl 0" forces the CPU path, "N tnl 1" allows the
+    shader again, to compare the two.
   - The 640x480 frame is mapped 4:3 at half size into the middle of the
     400x240 top screen. Geometry outside it is not cut off, so wide scenes
     show more to the sides.
   - Textures are decoded from every GX format (I4, I8, IA4, IA8, RGB565,
-    RGB5A3, RGBA8, CMPR, and C4/C8/C14X2 through their TLUT) into the
-    PICA's tiled RGBA8, once per image address, padded to a power of two.
+    RGB5A3, RGBA8, CMPR, and C4/C8/C14X2 through their TLUT), padded to a
+    power of two, into the smallest PICA format that holds them exactly:
+    LA4 (I4, IA4), LA8 (I8, IA8, IA8 palettes), RGB565 (RGB565, RGB565
+    palettes, opaque CMPR), RGBA5551 (CMPR with transparency), RGBA8 (the
+    rest). Once per image address; textures the game writes again (the
+    font's glyph cache) are decoded again, as DCFlushRange marks the
+    cached textures in the flushed range. When texture memory runs out,
+    the textures not used for two frames are freed.
   - TEV stages are compiled into PICA combiners. Constant inputs are
     folded on the CPU, so a GX stage that needs two constants becomes two
     PICA stages with one each (at most six PICA stages in all).
   - Alpha compare, blending, depth test and write masks are translated
     directly.
-
   - With clipping off (GX_CLIP_DISABLE) depth is kept just inside the
     range: 2D overlays sit exactly at the far end, which the PICA would
     clip.
-  - Textures written again by the game (the font's glyph cache) are
-    decoded again: DCFlushRange marks cached textures in the flushed range.
 
-The host side (platform/host/gpu.c, vshader.v.pica) only rotates the clip
-coordinates into the top screen's portrait framebuffer, and applies the
-draw state with citro3d.
+The host side (platform/host/gpu.c) binds one of the two programs per
+draw (switching uploads all of the new program's uniforms, as they share
+the PICA's registers), uploads the transform shader's changed uniforms,
+and applies the draw state with citro3d.
 
-Speed. Every GX vertex is transformed once and stored in the frame's
-vertex buffer; quads, strips and fans become 16-bit indices into it
-(C3D_DrawElements). Draws with the same state that follow each other are sent as one
-(about 45 instead of 520 per frame on the title screen); the host only sets
-state that changed and flushes the vertex buffer once per frame; the
-translated draw state is reused until a GX setter changes it. The platform
-is built with -O2; the game stays at -O1 (see compile_check.py). On the
-title screen in Azahar that gives 12-15 frames a second, from 10 (the main
-menu runs at 19.5): per frame about 18 ms of vertex work and 30 ms of game
-code, and about 16 ms in the retrace wait, during which the game's other
-threads run. On a New 3DS the vertex work took 95 ms a frame before the
-console's fast mode was turned on (docs/HARDWARE.md). platform/src/os/prof.c logs that breakdown every 120
-frames.
+Speed. Draws with the same state (and, on the shader path, the same
+uniforms) that follow each other are sent as one; the host only sets
+state that changed and flushes the vertex buffers once per frame; the
+translated draw state is reused until a GX setter changes it. On the
+shader path the matrix part of the uniform block is rebuilt only when the
+GX matrices changed. platform/src/os/prof.c logs every 120 frames where
+the frame's time goes: vertex decoding and transform (unlit, lit),
+texture decoding, GPU submission, the retrace wait, interrupt handlers
+and where the main thread blocks.
+
+Before the shader, the CPU path took 28-31 ms a frame on the New 3DS's
+title screen (two spot lights on nearly every vertex). In Azahar the
+shader path halves the CPU's vertex work there (17 to 9 ms); Azahar's
+software vertex shader is slow, so the field runs faster in Azahar on the
+CPU path. The console's numbers with the shader are still to be measured
+(docs/HARDWARE.md).
 
 Not done yet: lines and points, EFB copies to textures (GXCopyTex),
 indirect texturing, swap tables, fog, TEV colour registers written by one
-stage and read by a later one, culling.
+stage and read by a later one, culling, COLOR1/ALPHA1 lighting. Outskirt
+Stand's ground draws black on both paths.
 
 
 Testing without a screen
 ------------------------
 
 `run_azahar.py --script "650 press START 8;1000 shot"` writes a script
-for the port (platform/src/os/script.c): buttons held at given frames, and
-screenshots the port saves itself from its render target, as
-build/shots/colosseum-shot-NNNNN.png. Azahar runs minimised and does not
-take the desktop's focus.
+for the port (platform/src/os/script.c): buttons held at given frames,
+screenshots the port saves itself from its render target (as
+build/shots/colosseum-shot-NNNNN.png), and "tnl 0/1". Azahar runs
+minimised and does not take the desktop's focus.

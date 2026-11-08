@@ -125,6 +125,11 @@ converting:
                                Slot A", YES on "Continue without saving?":
                                the main menu (Battle Mode, Story Mode, Options)
                                at 15 frames a second in Azahar
+    Story Mode                 all units compile (unify_prototypes.py fixes,
+                               platform/fixups.txt): new Story, name choice,
+                               then Outskirt Stand (S1_out); with compact
+                               textures the field draws its train, buildings
+                               and sky (the ground still black)
     real New 3DS               docs/HARDWARE.md: boots to the memory card check
                                at 5 frames a second; quitting crashed in
                                hidScanInput (fixed, not yet retested); fast

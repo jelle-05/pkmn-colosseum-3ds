@@ -101,5 +101,12 @@ screen 13-14, main menu 20, no data aborts. Reached a battle and stopped
 at the stub battleCameraWazaInit (a Luma dump with exception type 2 and
 "port: <name>" on the stack is a stub, not a crash).
 
+Fourth run, 2026-11-08, build 7029cea (game at -O2, the idle function no
+longer hammering the interrupt lock): boot 25-28, title screen 12-14.5,
+main menu 22. Little change: the CPU is the limit, with 28-31 ms of
+vertex work a frame on the title screen. The next build (affbe7d) moves
+transform and lighting to the PICA and fixes texture memory running out;
+it is on the SD card with a script into Outskirt Stand, not yet run.
+
 After a run, check Azahar's log too: "unmapped" lines are reads that
 would be crashes on the console.

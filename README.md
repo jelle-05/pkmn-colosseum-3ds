@@ -6,8 +6,8 @@ A native Nintendo 3DS port of PokÃ©mon Colosseum, built on the
 The `decomp/` submodule points to [my fork](https://github.com/jelle-05/pkmn-colosseum)
 of it.
 
-This is an early work in progress: the game boots to its main menu, but you
-cannot play it yet. Where it stands and what comes next is in
+This is an early work in progress: the game boots to its main menu and into
+the first scene of Story Mode, but you cannot play it yet. Where it stands and what comes next is in
 [docs/NEXT.md](docs/NEXT.md); the overall plan is in the decomp's
 [docs/3DS_PORT_ROADMAP.md](decomp/docs/3DS_PORT_ROADMAP.md).
 
@@ -29,7 +29,8 @@ Status
   game runs in the ARM11's big-endian data mode, so its data and the files
   on the disc are used as they are (see [docs/BIG_ENDIAN.md](docs/BIG_ENDIAN.md)).
   The game boots through the title screen and the memory card question to
-  its main menu, drawn by the port's renderer (see
+  its main menu and into Story Mode's first scene, drawn by the port's
+  renderer (transform and lighting on the PICA) (see
   [docs/RENDERER.md](docs/RENDERER.md)), with silent audio and no memory
   card. It is slow so far: 12-20 frames a second in Azahar, and 5 on a
   New 3DS before the console's fast mode was turned on (see
