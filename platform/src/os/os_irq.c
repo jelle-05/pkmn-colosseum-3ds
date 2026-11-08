@@ -149,7 +149,9 @@ static void irq_thread(void* unused)
             host_lock_unlock(&pending_lock);
             __port_irq_handler = (void*)fn;
             __port_irq_run++;
+            PROF_BEGIN(t_irq);
             fn(arg, value);
+            PROF_END(PROF_IRQ_HANDLERS, t_irq);
             it = pop_due(OSGetTime());
         }
         __port_irq_drop(&irq_self);

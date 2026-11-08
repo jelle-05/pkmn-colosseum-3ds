@@ -139,9 +139,12 @@ void GXCopyTex(void* dest, int clear)
 void __gx_ensure_frame(void) { ensure_frame(); }
 
 /* ---- synchronisation -------------------------------------------------------------
- * The 3DS GPU work is synchronous to the frame for now, so the draw-done and
- * draw-sync events are delivered at the next point the game waits or a
- * retrace happens, like the GameCube's PE interrupts would be. */
+ * Draws are handed to the 3DS GPU as they come, so by the time the game asks
+ * for the draw-done or draw-sync event all of its work is submitted. The
+ * event is raised at once, as an interrupt (like the GameCube's PE
+ * interrupt when the GPU finishes). Delivering it at the next retrace cost
+ * every frame a retrace: GSgfxRenderEnd yields until the callback has run,
+ * and then waits for a retrace of its own. */
 
 GXDrawDoneCallback GXSetDrawDoneCallback(GXDrawDoneCallback cb)
 {
@@ -157,12 +160,27 @@ GXDrawSyncCallback GXSetDrawSyncCallback(GXDrawSyncCallback cb)
     return old;
 }
 
-void GXSetDrawDone(void) { __gx.draw_done_pending = 1; }
+extern long long OSGetTime(void);
+extern void __port_irq_post(long long when, void (*fn)(void*, long), void* arg, long value);
+void __port_gx_deliver(void);
+
+static void pe_interrupt(void* unused, long unused2)
+{
+    (void)unused; (void)unused2;
+    __port_gx_deliver();
+}
+
+void GXSetDrawDone(void)
+{
+    __gx.draw_done_pending = 1;
+    __port_irq_post(OSGetTime(), pe_interrupt, 0, 0);
+}
 
 void GXSetDrawSync(gx_u16 token)
 {
     __gx.draw_sync_token = token;
     __gx.draw_sync_pending = 1;
+    __port_irq_post(OSGetTime(), pe_interrupt, 0, 0);
 }
 
 void __port_gx_deliver(void)

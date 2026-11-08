@@ -36,6 +36,8 @@ def symbol_address(image, tools, name):
 
 
 def heartbeat_address(image, tools, name=None):
+    if name and name.startswith("0x"):              # an address, e.g. inside a function
+        return name
     return symbol_address(image, tools, name or "__port_thread_dump")
 
 

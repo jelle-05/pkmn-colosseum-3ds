@@ -12,6 +12,7 @@
  * starting a request, so calling back before the request function returns
  * would break it.
  */
+#include "port/prof.h"
 #include "port/host.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,7 +87,10 @@ static void fatal(const char* what)
 
 static int read_image(void* dst, unsigned long offset, unsigned long len)
 {
-    return host_file_read(iso, dst, len, offset) == len;
+    PROF_BEGIN(t_read);
+    int ok = host_file_read(iso, dst, len, offset) == len;
+    PROF_END(PROF_DVD, t_read);
+    return ok;
 }
 
 void DVDInit(void)

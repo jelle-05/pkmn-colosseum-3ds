@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import compile_check  # noqa: E402
 import gen_layout  # noqa: E402
+import ppc_data  # noqa: E402
 from link_probe import read_symbols, c_name  # noqa: E402
 from access_widths import symbol_addresses  # noqa: E402
 
@@ -324,7 +325,7 @@ def make_stubs(report, syms, provided, game_objs, decomp):
     for group, names in sorted(report["left_by_category"].items()):
         lines.append(f"/* ---- {group}: {len(names)} */")
         for name in sorted(names):
-            if name in provided:
+            if name in provided or name in game_data:      # game_data: also the generated units
                 continue
             kind, size, align = syms.get(name, ("function", 0, 8))
             i += 1
@@ -468,6 +469,16 @@ def main():
     with ThreadPoolExecutor() as pool:
         provided = set().union(*pool.map(defined, platform_objs))
         game_defined = set().union(*pool.map(lambda o: defined(o, "TDBRS"), game_objs))
+
+    # The decomp's units without C source (battle scripts, messages, script
+    # bytecode): their data, from the decomp's PowerPC objects.
+    gen_src, gen_report = ppc_data.sources(manifest, decomp, ROOT / "build" / "ppc_data", game_defined)
+    (OUT / "ppc_data.txt").write_text("\n".join(gen_report) + "\n", encoding="utf-8")
+    gen_objs = compile_all(gen_src, OUT / "ppc_data", ROOT / "build" / "ppc_data", be_flags)
+    with ThreadPoolExecutor() as pool:
+        game_defined |= set().union(*pool.map(lambda o: defined(o, "TDBRS"), gen_objs))
+    game_objs = game_objs + gen_objs
+    print(f"generated data units: {len(gen_objs)}")
     strong_platform = set().union(*(defined(o, "TDBRS") for o in platform_objs))
     clash = sorted(strong_platform & game_defined)
     if clash:

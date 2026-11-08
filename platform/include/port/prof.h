@@ -3,7 +3,7 @@
 #define PORT_PROF_H
 
 enum { PROF_VERTICES, PROF_GPU_SUBMIT, PROF_FRAME_END, PROF_RETRACE_WAIT, PROF_IRQ_WAIT, PROF_DVD,
-       PROF_FRAME, PROF_SLOTS };
+       PROF_IRQ_HANDLERS, PROF_FRAME, PROF_SLOTS };
 
 long long __prof_now(void);
 void __prof_add(int slot, long long ticks);
