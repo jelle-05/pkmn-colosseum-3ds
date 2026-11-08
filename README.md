@@ -7,7 +7,8 @@ The `decomp/` submodule points to [my fork](https://github.com/jelle-05/pkmn-col
 of it.
 
 This is an early work in progress: the game boots to its main menu and into
-the first scene of Story Mode, but you cannot play it yet. Where it stands and what comes next is in
+the first scene of Story Mode, but you cannot play it yet. Where it stands
+and what comes next is in
 [docs/NEXT.md](docs/NEXT.md); the overall plan is in the decomp's
 [docs/3DS_PORT_ROADMAP.md](decomp/docs/3DS_PORT_ROADMAP.md).
 
