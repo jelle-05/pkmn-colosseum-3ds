@@ -86,6 +86,23 @@ static float comp(const unsigned char* p, int type, int frac)
     }
 }
 
+/* comp() with the scale worked out once per draw. */
+static inline float comp_s(const unsigned char* p, int type, float scale)
+{
+    switch (type) {
+    case GX_U8: return p[0] * scale;
+    case GX_S8: return (signed char)p[0] * scale;
+    case GX_U16: return rd16(p) * scale;
+    case GX_S16: return (short)rd16(p) * scale;
+    default: {
+        unsigned u = rd32(p);
+        float f;
+        memcpy(&f, &u, 4);
+        return f;
+    }
+    }
+}
+
 static int color_size(int type)
 {
     switch (type) {
@@ -163,6 +180,7 @@ typedef struct {
     unsigned char attr, desc, type, cnt, frac, cs, size;
     const unsigned char* base;
     unsigned stride;
+    float scale;                      /* 1 / 2^frac (normals: their fixed point) */
 } AttrIn;
 
 static AttrIn layout[GX_VA_TEX0 + 8];
@@ -187,6 +205,12 @@ static void layout_setup(int fmt)
         l->frac = __gx.vtx_fmt[fmt][a].frac;
         l->cs = (unsigned char)comp_size(l->type);
         l->size = (unsigned char)attr_data_size(a, fmt);
+        {
+            int f = l->frac;
+            if (a == GX_VA_NRM)                     /* normals: 6 bits for bytes, 14 for shorts */
+                f = l->type == GX_S8 ? 6 : l->type == GX_S16 ? 14 : 0;
+            l->scale = 1.0f / (float)(1u << f);
+        }
         l->base = __gx.array[a].base;
         l->stride = __gx.array[a].stride;
     }
@@ -218,24 +242,23 @@ static void read_vertex(const unsigned char** pp, int fmt, Vtx* v)
                 continue;
             src = l->base + idx * l->stride;
         }
-        int a = l->attr, type = l->type, frac = l->frac, cs = l->cs;
+        int a = l->attr, type = l->type, cs = l->cs;
+        float sc = l->scale;
         if (a == GX_VA_POS) {
-            v->pos[0] = comp(src, type, frac);
-            v->pos[1] = comp(src + cs, type, frac);
-            v->pos[2] = l->cnt ? comp(src + 2 * cs, type, frac) : 0.0f;
+            v->pos[0] = comp_s(src, type, sc);
+            v->pos[1] = comp_s(src + cs, type, sc);
+            v->pos[2] = l->cnt ? comp_s(src + 2 * cs, type, sc) : 0.0f;
         } else if (a == GX_VA_NRM) {
-            /* Normals have a fixed point: 6 bits for bytes, 14 for shorts. */
-            int nf = type == GX_S8 ? 6 : type == GX_S16 ? 14 : 0;
             for (int k = 0; k < 3; k++)
-                v->nrm[k] = comp(src + k * cs, type, nf);
+                v->nrm[k] = comp_s(src + k * cs, type, sc);
             v->has_nrm = 1;
         } else if (a == GX_VA_CLR0 || a == GX_VA_CLR1) {
             color(src, type, v->clr[a - GX_VA_CLR0]);
             v->has_clr[a - GX_VA_CLR0] = 1;
         } else {
             int t = a - GX_VA_TEX0;
-            v->tex[t][0] = comp(src, type, frac);
-            v->tex[t][1] = l->cnt ? comp(src + cs, type, frac) : 0.0f;
+            v->tex[t][0] = comp_s(src, type, sc);
+            v->tex[t][1] = l->cnt ? comp_s(src + cs, type, sc) : 0.0f;
             v->has_tex[t] = 1;
         }
     }
@@ -307,54 +330,102 @@ static void project(const float* e, float* clip)
 
 static float light_f(const GXLightObj* l, int i) { float f; memcpy(&f, &l->data[i], 4); return f; }
 
-/* One lighting channel's colour or alpha for a vertex (GX_COLOR0 = 0, ...). */
-static void channel(int ch, const Vtx* v, const float* eye, const float* n, unsigned char* out)
+/* The lights of a draw, read out of the GX light objects once per draw
+ * (light_setup) instead of once per vertex and channel. */
+typedef struct {
+    float pos[3], dir[3], col[4], a[3], k[3];
+} LightPre;
+
+static LightPre lights[GX_MAX_LIGHT];
+static unsigned char chan_lights[4][GX_MAX_LIGHT], chan_nlights[4];
+static int alpha_shares_color;      /* channel 2's light sum equals channel 0's */
+
+static void light_setup(void)
+{
+    unsigned used = 0;
+    for (int ch = 0; ch < 4; ch++) {
+        chan_nlights[ch] = 0;
+        if (!__gx.chan[ch].enable)
+            continue;
+        for (int i = 0; i < GX_MAX_LIGHT; i++)
+            if (__gx.chan[ch].light_mask & (1u << i)) {
+                chan_lights[ch][chan_nlights[ch]++] = (unsigned char)i;
+                used |= 1u << i;
+            }
+    }
+    for (int i = 0; i < GX_MAX_LIGHT; i++) {
+        if (!(used & (1u << i)))
+            continue;
+        const GXLightObj* l = &__gx.light[i];
+        LightPre* p = &lights[i];
+        unsigned lc = l->data[3];
+        p->col[0] = (float)((lc >> 24) & 255);
+        p->col[1] = (float)((lc >> 16) & 255);
+        p->col[2] = (float)((lc >> 8) & 255);
+        p->col[3] = (float)(lc & 255);
+        for (int k = 0; k < 3; k++) {
+            p->a[k] = light_f(l, 4 + k);
+            p->k[k] = light_f(l, 7 + k);
+            p->pos[k] = light_f(l, 10 + k);
+            p->dir[k] = light_f(l, 13 + k);
+        }
+    }
+    alpha_shares_color = __gx.chan[0].enable && __gx.chan[2].enable
+        && __gx.chan[0].light_mask == __gx.chan[2].light_mask
+        && __gx.chan[0].diff_fn == __gx.chan[2].diff_fn && __gx.chan[0].attn_fn == __gx.chan[2].attn_fn;
+}
+
+/* The lights' sum for one channel at a vertex (without ambient). */
+static unsigned stat_lit, stat_light_evals, stat_spot, stat_normals;
+
+static void light_sum(int ch, const float* eye, const float* n, float* acc)
+{
+    stat_lit++;
+    stat_light_evals += chan_nlights[ch];
+    stat_spot += __gx.chan[ch].attn_fn == 1;
+    int diff_fn = __gx.chan[ch].diff_fn, spot = __gx.chan[ch].attn_fn == 1;
+    acc[0] = acc[1] = acc[2] = acc[3] = 0;
+    for (int j = 0; j < chan_nlights[ch]; j++) {
+        const LightPre* l = &lights[chan_lights[ch][j]];
+        float L[3] = { l->pos[0] - eye[0], l->pos[1] - eye[1], l->pos[2] - eye[2] };
+        float d2 = L[0] * L[0] + L[1] * L[1] + L[2] * L[2], d = sqrtf(d2);
+        if (d > 0) { float r = 1.0f / d; L[0] *= r; L[1] *= r; L[2] *= r; }
+        float diff = n[0] * L[0] + n[1] * L[1] + n[2] * L[2];
+        if (diff_fn == 0) diff = 1.0f;                       /* GX_DF_NONE */
+        else if (diff_fn == 2 && diff < 0) diff = 0;         /* GX_DF_CLAMP */
+        float s = diff;
+        if (spot) {                                          /* GX_AF_SPOT */
+            float cs = -(L[0] * l->dir[0] + L[1] * l->dir[1] + L[2] * l->dir[2]);
+            float a = l->a[0] + l->a[1] * cs + l->a[2] * cs * cs;
+            float k = l->k[0] + l->k[1] * d + l->k[2] * d2;
+            s *= (a > 0 ? a : 0) / (k > 0 ? k : 1);
+        }
+        acc[0] += l->col[0] * s;
+        acc[1] += l->col[1] * s;
+        acc[2] += l->col[2] * s;
+        acc[3] += l->col[3] * s;
+    }
+}
+
+/* One lighting channel's colour or alpha for a vertex (GX_COLOR0 = 0, ...),
+ * given the lights' sum for it. */
+static void channel_out(int ch, const Vtx* v, const float* sum, unsigned char* out)
 {
     int slot = ch & 1, is_alpha = ch >= 2;
     const unsigned char* vc = v->has_clr[slot] ? v->clr[slot] : 0;
-    unsigned char mat[4], amb[4];
-    memcpy(mat, __gx.chan[ch].mat_src && vc ? vc : (const unsigned char*)&__gx.chan_mat[slot], 4);
+    const unsigned char* mat = __gx.chan[ch].mat_src && vc ? vc : (const unsigned char*)&__gx.chan_mat[slot];
     if (!__gx.chan[ch].enable) {
         if (is_alpha) out[3] = mat[3];
         else memcpy(out, mat, 3);
         return;
     }
-    memcpy(amb, __gx.chan[ch].amb_src && vc ? vc : (const unsigned char*)&__gx.chan_amb[slot], 4);
-    float acc[4] = { amb[0], amb[1], amb[2], amb[3] };
-    for (int i = 0; i < GX_MAX_LIGHT; i++) {
-        if (!(__gx.chan[ch].light_mask & (1u << i)))
-            continue;
-        const GXLightObj* l = &__gx.light[i];
-        unsigned lc = l->data[3];
-        float lp[3] = { light_f(l, 10), light_f(l, 11), light_f(l, 12) };
-        float L[3] = { lp[0] - eye[0], lp[1] - eye[1], lp[2] - eye[2] };
-        float d2 = L[0] * L[0] + L[1] * L[1] + L[2] * L[2], d = sqrtf(d2);
-        if (d > 0) { L[0] /= d; L[1] /= d; L[2] /= d; }
-        float diff = n[0] * L[0] + n[1] * L[1] + n[2] * L[2];
-        if (__gx.chan[ch].diff_fn == 0) diff = 1.0f;          /* GX_DF_NONE */
-        else if (__gx.chan[ch].diff_fn == 2 && diff < 0) diff = 0;   /* GX_DF_CLAMP */
-        float attn = 1.0f;
-        if (__gx.chan[ch].attn_fn == 1) {                     /* GX_AF_SPOT */
-            float dir[3] = { light_f(l, 13), light_f(l, 14), light_f(l, 15) };
-            float cs = -(L[0] * dir[0] + L[1] * dir[1] + L[2] * dir[2]);
-            float a = light_f(l, 4) + light_f(l, 5) * cs + light_f(l, 6) * cs * cs;
-            float k = light_f(l, 7) + light_f(l, 8) * d + light_f(l, 9) * d2;
-            attn = (a > 0 ? a : 0) / (k > 0 ? k : 1);
-        }
-        float s = diff * attn;
-        acc[0] += ((lc >> 24) & 255) * s;
-        acc[1] += ((lc >> 16) & 255) * s;
-        acc[2] += ((lc >> 8) & 255) * s;
-        acc[3] += (lc & 255) * s;
-    }
-    for (int k = 0; k < 4; k++) {
-        float c = acc[k] > 255 ? 255 : acc[k] < 0 ? 0 : acc[k];
-        unsigned char r = (unsigned char)(mat[k] * c / 255.0f);
-        if (is_alpha) { if (k == 3) out[3] = r; }
-        else if (k < 3) out[k] = r;
+    const unsigned char* amb = __gx.chan[ch].amb_src && vc ? vc : (const unsigned char*)&__gx.chan_amb[slot];
+    for (int k = is_alpha ? 3 : 0; k < (is_alpha ? 4 : 3); k++) {
+        float c = amb[k] + sum[k];
+        c = c > 255 ? 255 : c < 0 ? 0 : c;
+        out[k] = (unsigned char)(mat[k] * c * (1.0f / 255.0f));
     }
 }
-
 static const float identity34[12] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
 
 static const float* tex_matrix(unsigned id)
@@ -1132,6 +1203,11 @@ void __gx_draw_frame_start(void)
 {
     static unsigned frames, verts, draws_logged;
     verts += vused;
+    if (frames + 1 == 120 && draws_logged < 20)
+        __port_log("gx: per frame %u light sums (%u with spot), %u light evaluations",
+                   stat_lit / 120, stat_spot / 120, stat_light_evals / 120);
+    if (frames + 1 == 120)
+        stat_lit = stat_light_evals = stat_spot = 0;
     if (++frames == 120 && draws_logged < 20) {
         draws_logged++;
         __port_log("gx: %u triangle vertices per frame", verts / 120);
@@ -1156,6 +1232,8 @@ static void emit_setup(int units, const int* unit_coord)
 {
     emit_units = units;
     emit_light = __gx.num_chans > 0 && (__gx.chan[0].enable || __gx.chan[2].enable);
+    if (emit_light)
+        light_setup();
     emit_normals = emit_light;
     for (int u = 0; u < units; u++)
         if (unit_coord[u] >= 0 && unit_coord[u] < GX_MAX_TEXCOORD && __gx.texgen[unit_coord[u]].src == 1)
@@ -1181,8 +1259,13 @@ static void emit(const Vtx* v, GpuVertex* out, const int* unit_coord, const floa
         out->pos[k] = clip[k];          /* element by element: little-endian floats */
     unsigned char c[4] = { 255, 255, 255, 255 };
     if (__gx.num_chans > 0) {
-        channel(0, v, e, n, c);
-        channel(2, v, e, n, c);
+        float s0[4], s2[4];
+        if (__gx.chan[0].enable)
+            light_sum(0, e, n, s0);
+        if (__gx.chan[2].enable && !alpha_shares_color)
+            light_sum(2, e, n, s2);
+        channel_out(0, v, s0, c);
+        channel_out(2, v, alpha_shares_color ? s0 : s2, c);
     }
     memcpy(out->color, c, 4);
     for (int u = 0; u < emit_units; u++) {
@@ -1268,10 +1351,19 @@ static void draw(int prim, int fmt, const unsigned char* data, unsigned count)
     GpuIndex* idx = ibuf + iused;
     PROF_BEGIN(t_vtx);
     unsigned base = vused, written = 0;
-    for (unsigned i = 0; i < count; i++) {
-        Vtx v;
-        read_vertex(&p, fmt, &v);
-        emit(&v, &out[i], unit_coord, (const float(*)[2])scale);
+    /* In chunks, so decoding and transforming can be timed apart. */
+    static Vtx vb[64];
+    for (unsigned i = 0; i < count;) {
+        unsigned n = count - i < 64 ? count - i : 64;
+        PROF_BEGIN(t_dec);
+        for (unsigned k = 0; k < n; k++)
+            read_vertex(&p, fmt, &vb[k]);
+        PROF_END(PROF_VTX_DECODE, t_dec);
+        PROF_BEGIN(t_emit);
+        for (unsigned k = 0; k < n; k++)
+            emit(&vb[k], &out[i + k], unit_coord, (const float(*)[2])scale);
+        PROF_END(emit_light ? PROF_VTX_LIT : PROF_VTX_UNLIT, t_emit);
+        i += n;
     }
     switch (prim) {
     case GX_QUADS:

@@ -17,7 +17,7 @@ static unsigned frames;
 
 static const char* const names[PROF_SLOTS] = {
     "vertices", "gpu submit", "frame end", "retrace wait", "irq lock wait", "dvd read",
-    "irq handlers", "frame",
+    "irq handlers", " vtx decode", " vtx unlit", " vtx lit", "frame",
 };
 
 long long __prof_now(void) { return OSGetTime(); }
